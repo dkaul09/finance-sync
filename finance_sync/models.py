@@ -156,6 +156,9 @@ class CategoryResult:
     confidence: float | None = None
     recurring: float | None = None
     business_expense: float | None = None
+    #: True when confidence fell below the threshold: the proposal goes to the
+    #: Review tab for a human instead of straight into Transactions.
+    needs_review: bool = False
 
 
 @dataclass

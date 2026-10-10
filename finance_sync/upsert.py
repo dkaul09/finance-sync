@@ -27,6 +27,8 @@ class UpsertPlan:
     preserved_manual: list[str] = field(default_factory=list)
     #: set when a dry run would have had to create the spreadsheet.
     would_create: bool = False
+    #: transactions routed to the Review tab instead of Transactions.
+    review: list = field(default_factory=list)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -34,6 +36,7 @@ class UpsertPlan:
             "inserted": len(self.inserts),
             "updated": len(self.updates),
             "unchanged": len(self.unchanged),
+            "routed_to_review": len(self.review),
         }
 
     def describe(self) -> str:
@@ -45,6 +48,8 @@ class UpsertPlan:
             f"  updates:   {len(self.updates)}",
             f"  unchanged: {len(self.unchanged)}",
         ]
+        if self.review:
+            lines.append(f"  to review: {len(self.review)}")
         if self.preserved_manual:
             lines.append(
                 f"  manual categories preserved: {', '.join(self.preserved_manual)}"

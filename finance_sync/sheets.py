@@ -10,7 +10,7 @@ from .budget import BUDGET_COLUMNS, FIRST_LINE_ROW, build_rows, default_rows
 from .categorize import LayeredCategorizer, apply_results, parse_overrides
 from .models import Transaction
 from .rows import OVERRIDE_COLUMNS, REVIEW_COLUMNS, TRANSACTION_COLUMNS
-from .rows import row_to_transaction
+from .rows import review_row_ids, row_to_transaction, transaction_to_review_row
 from .upsert import UpsertPlan, plan_upsert
 
 logger = logging.getLogger(__name__)
@@ -227,11 +227,49 @@ class SheetsSync:
                 categorizer = LayeredCategorizer(overrides=overrides)
 
             month_txns = by_month[month_key]
-            categorized = apply_results(month_txns, categorizer.categorize(month_txns))
+            results = categorizer.categorize(month_txns)
+            categorized = apply_results(month_txns, results)
 
-            existing = self._backend.read_tab(spreadsheet_id, TRANSACTIONS_TAB)
-            body = existing[1:] if existing else []
-            plans[month_key] = plan_upsert(body, categorized, now=now)
+            # Low-confidence proposals go to Review rather than Transactions,
+            # so an uncertain guess never silently becomes a fact.
+            low_confidence = {r.transaction_id for r in results if r.needs_review}
+            existing_transactions = self._backend.read_tab(
+                spreadsheet_id, TRANSACTIONS_TAB
+            )
+            body = existing_transactions[1:] if existing_transactions else []
+            existing_by_id = {}
+            for row in body:
+                parsed = row_to_transaction(row)
+                if parsed is not None:
+                    existing_by_id[parsed.transaction_id] = parsed
+
+            for_transactions = []
+            for txn in categorized:
+                if txn.transaction_id not in low_confidence:
+                    for_transactions.append(txn)
+                    continue
+                existing = existing_by_id.get(txn.transaction_id)
+                if existing is not None:
+                    # Already on the sheet: keep maintaining its financial
+                    # fields, but keep whatever category is already there
+                    # rather than stamping an unconfident guess over it.
+                    for_transactions.append(
+                        txn.with_category(
+                            existing.category,
+                            existing.category_source,
+                            confidence=existing.confidence,
+                            recurring=existing.recurring,
+                            business_expense=existing.business_expense,
+                        )
+                    )
+                # Otherwise it is left out of Transactions entirely until a
+                # human resolves it on the Review tab.
+
+            for_review = [t for t in categorized if t.transaction_id in low_confidence]
+
+            plan = plan_upsert(body, for_transactions, now=now)
+            plan.review = for_review
+            plans[month_key] = plan
         return plans
 
     def apply(self, plans: dict[str, UpsertPlan]) -> None:
@@ -246,7 +284,23 @@ class SheetsSync:
                 self._backend.update_rows(spreadsheet_id, TRANSACTIONS_TAB, month_plan.updates)
             if month_plan.inserts:
                 self._backend.append_rows(spreadsheet_id, TRANSACTIONS_TAB, month_plan.inserts)
+            self._write_review(spreadsheet_id, month_plan)
             self.refresh_budget(spreadsheet_id)
+
+    def _write_review(self, spreadsheet_id: str, plan: UpsertPlan) -> None:
+        """Append new low-confidence proposals, skipping ones already listed."""
+        if not plan.review:
+            return
+        existing = self._backend.read_tab(spreadsheet_id, REVIEW_TAB)
+        listed = review_row_ids(existing[1:] if existing else [])
+        rows = [
+            transaction_to_review_row(txn)
+            for txn in plan.review
+            if txn.transaction_id not in listed
+        ]
+        if rows:
+            logger.info("Routing %s transaction(s) to Review", len(rows))
+            self._backend.append_rows(spreadsheet_id, REVIEW_TAB, rows)
 
     def refresh_budget(self, spreadsheet_id: str) -> list[list[str]]:
         """Recompute Planned vs Actual from the whole Transactions tab.

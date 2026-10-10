@@ -215,6 +215,29 @@ Three layers, cheapest first, first match wins:
 3. **Categorizer** — `NullCategorizer` by default (resolves nothing); Jev when
    `USE_JEV=true`. Source: `jev`.
 
+### Jev (optional, `USE_JEV=true`)
+
+Only transactions the first two layers could not resolve reach Jev, so the
+cost is bounded by how incomplete your rules are. Each one is a single
+System One call carrying three questions evaluated in parallel:
+
+- **category** — a `Choice` over the budget lines, each with a one-line
+  definition. `sk` is deliberately not offered, since it is manual-only.
+- **recurring** — a `Noul`: is this a recurring subscription?
+- **business** — a `Noul`: does this look like a business expense?
+
+Both Noul probabilities are written to their own columns on `Transactions`.
+
+**Confidence gating.** `Choice` answers carry a calibrated `confidence`.
+At or above `JEV_CONFIDENCE_THRESHOLD` (default `0.8`) the category is
+written straight to `Transactions`. Below it, the transaction is written to
+the `Review` tab instead with the proposed category and the score, and is
+**not** added to `Transactions` — an uncertain guess never silently becomes a
+fact. A transaction already on `Transactions` keeps the category it has.
+
+If the Jev API fails, the run degrades to `miscl`/`none` and continues: a
+categorization outage must not stop financial data reaching the sheet.
+
 Matching normalizes punctuation, so one pattern matches both SimpleFIN's clean
 `payee` (`Trader Joe's`) and the raw bank `description` (`TRADER JOE S #250`).
 The **longest** matching pattern wins, which is what keeps `UBER EATS`

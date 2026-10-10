@@ -82,8 +82,8 @@ class TestSamePayloadTwice:
         first = sync.sync(batch, now=NOW)
         second = sync.sync(batch, now=LATER)
 
-        assert first["2026-10"].counts == {"inserted": 2, "updated": 0, "unchanged": 0}
-        assert second["2026-10"].counts == {"inserted": 0, "updated": 0, "unchanged": 2}
+        assert first["2026-10"].counts == {"inserted": 2, "updated": 0, "unchanged": 0, "routed_to_review": 0}
+        assert second["2026-10"].counts == {"inserted": 0, "updated": 0, "unchanged": 2, "routed_to_review": 0}
 
     def test_row_count_is_stable_across_runs(self, sync, backend):
         batch = [txn("TXN-1"), txn("TXN-2", amount="-20.00")]
@@ -128,7 +128,7 @@ class TestPendingToPosted:
         settled = txn("TXN-1", pending=False, posted=dt.date(2026, 10, 13), amount="-18.75")
         plan = sync.sync([settled], now=LATER)
 
-        assert plan["2026-10"].counts == {"inserted": 0, "updated": 1, "unchanged": 0}
+        assert plan["2026-10"].counts == {"inserted": 0, "updated": 1, "unchanged": 0, "routed_to_review": 0}
         assert len(backend.data_rows(spreadsheet_title("2026-10"))) == 1
 
     def test_pending_flag_flips_to_false(self, sync, backend):
@@ -177,7 +177,7 @@ class TestAmountChangeOnSettle:
     def test_amount_change_alone_counts_as_an_update(self, sync, backend):
         sync.sync([txn("TXN-1", amount="-10.00")], now=NOW)
         plan = sync.sync([txn("TXN-1", amount="-12.34")], now=LATER)
-        assert plan["2026-10"].counts == {"inserted": 0, "updated": 1, "unchanged": 0}
+        assert plan["2026-10"].counts == {"inserted": 0, "updated": 1, "unchanged": 0, "routed_to_review": 0}
 
     def test_trailing_zero_difference_is_not_a_change(self, sync, backend):
         """-18.75 and -18.750 are the same money; don't write a pointless update."""
@@ -337,7 +337,7 @@ class TestRoundTrip:
         plans = sync.sync(parse_accounts(settled_payload).transactions, now=LATER)
 
         rows_after = backend.data_rows(spreadsheet_title("2026-10"))
-        assert plans["2026-10"].counts == {"inserted": 0, "updated": 1, "unchanged": 0}
+        assert plans["2026-10"].counts == {"inserted": 0, "updated": 1, "unchanged": 0, "routed_to_review": 0}
         assert len(rows_after) == rows_before
 
         settled = next(r for r in rows_after if column(r, "transaction_id") == "TXN-1003")

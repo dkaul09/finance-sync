@@ -171,6 +171,42 @@ def row_to_transaction(row: list[str]) -> Transaction | None:
     )
 
 
+def transaction_to_review_row(
+    txn: Transaction, now: dt.datetime | None = None
+) -> list[str]:
+    """Serialize a low-confidence proposal for the Review tab.
+
+    `proposed_category` is Jev's guess; `category` is left blank for the user
+    to fill in, which is what the review command looks for.
+    """
+    stamp = now or dt.datetime.now(dt.UTC)
+    return [
+        txn.transaction_id,
+        _fmt_date(txn.date),
+        txn.account,
+        txn.description,
+        str(txn.amount),
+        str(txn.category),
+        _fmt_float(txn.confidence),
+        "",  # category: the human fills this in
+        _fmt_float(txn.recurring),
+        _fmt_float(txn.business_expense),
+        stamp.replace(microsecond=0).isoformat(),
+    ]
+
+
+def review_row_ids(rows: list[list[str]]) -> set[str]:
+    """Transaction ids already sitting on the Review tab."""
+    ids = set()
+    for row in rows:
+        if not row:
+            continue
+        txn_id = (row[0] or "").strip()
+        if txn_id and txn_id != "transaction_id":
+            ids.add(txn_id)
+    return ids
+
+
 def comparable(txn: Transaction) -> tuple:
     """The tuple used to decide whether a row actually changed."""
     values = []

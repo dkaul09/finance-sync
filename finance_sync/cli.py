@@ -162,9 +162,16 @@ def _run_sync(config: Config, args, days: int) -> int:
 
     backend = _make_backend(config, args.fake_sheets)
     sheets = SheetsSync(backend, folder_name=config.drive_folder_name, dry_run=args.dry_run)
-    plans = sheets.sync(result.transactions)
 
-    totals = {"inserted": 0, "updated": 0, "unchanged": 0}
+    def categorizer_factory(overrides):
+        from .categorize import LayeredCategorizer
+        from .jev import build_categorizer
+
+        return LayeredCategorizer(overrides=overrides, fallback=build_categorizer(config))
+
+    plans = sheets.sync(result.transactions, categorizer_factory=categorizer_factory)
+
+    totals = {"inserted": 0, "updated": 0, "unchanged": 0, "routed_to_review": 0}
     print()
     for month_key, plan in sorted(plans.items()):
         print(f"Finances {month_key}:")
@@ -180,7 +187,8 @@ def _run_sync(config: Config, args, days: int) -> int:
     print(
         f"\n{verb}: fetched={len(result.transactions)} inserted={totals['inserted']} "
         f"updated={totals['updated']} unchanged={totals['unchanged']} "
-        f"routed_to_review=0 requests={result.requests_made} errors={len(result.errors)}"
+        f"routed_to_review={totals['routed_to_review']} "
+        f"requests={result.requests_made} errors={len(result.errors)}"
     )
 
     # A non-empty errors array must make a scheduled run fail visibly.
