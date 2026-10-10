@@ -66,20 +66,41 @@ This is the only part that cannot be automated. Roughly 10 minutes, once.
    - [Google Sheets API](https://console.cloud.google.com/apis/library/sheets.googleapis.com)
    - [Google Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com)
 
-3. **Configure the OAuth consent screen**
-   ([APIs & Services → OAuth consent screen](https://console.cloud.google.com/apis/credentials/consent)):
-   - User type: **External**
-   - App name: anything; support email: your own
-   - Scopes: you can leave these blank here, the script requests them
-   - Test users: add your own Google account
+3. **Configure the consent screen** — Google renamed this; there is no longer a
+   single "OAuth consent screen" wizard. Go to
+   [Google Auth Platform](https://console.cloud.google.com/auth/overview)
+   (console menu → *APIs & Services* → *Google Auth Platform*) and click
+   **Get started**, then work through the four panels:
 
-4. **Publish the app.** On the consent screen's summary page, click
-   **Publish app** so the publishing status reads **In production**.
+   | Panel | What to enter |
+   |---|---|
+   | App Information | App name (anything, e.g. `finance-sync`); support email: your own |
+   | Audience | **External** |
+   | Contact Information | your own email |
+   | Finish | tick *I agree to the Google API Services: User Data Policy* → **Create** |
 
-   > **Do not skip this.** While the app is in *Testing*, Google expires the
-   > refresh token after **7 days** and the scheduled sync silently stops
-   > working. You are the only user and the scopes are non-sensitive, so no
-   > Google verification review is required.
+   Afterwards the platform shows four sections in the left nav: **Overview**,
+   **Branding**, **Audience**, **Data Access**, **Clients**.
+
+   - **Audience** → under *Test users* click **Add users**, add your own Google
+     account, **Save**.
+   - **Data Access** → *Add or remove scopes*. You can leave this empty;
+     `scripts/auth.py` requests the scopes it needs at authorization time.
+
+4. **Publish the app.** Still on
+   [**Audience**](https://console.cloud.google.com/auth/audience), find
+   *Publishing status: Testing* and click **Publish app**, then confirm. It
+   should then read **In production**.
+
+   > **Do not skip this.** While publishing status is *Testing*, Google issues
+   > refresh tokens that expire after **7 days** on a fixed clock — not an
+   > inactivity timer — so a scheduled sync dies every week with
+   > `invalid_grant: Token has been expired or revoked`. In production, refresh
+   > tokens do not expire unless revoked or unused for ~6 months.
+   >
+   > Publishing does **not** require Google verification review here: you are
+   > the only user, and `drive.file`/`spreadsheets` are non-sensitive scopes.
+   > You may see "Verification not required".
 
 5. **Create an OAuth client**
    ([APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials)):
