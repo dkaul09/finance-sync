@@ -1,0 +1,85 @@
+{
+  "errors": ["Connection to Example Credit Union may need attention."],
+  "accounts": [
+    {
+      "org": { "domain": "mybank.example.com", "name": "My Bank", "sfin-url": "https://bridge.simplefin.org/simplefin" },
+      "id": "ACT-debit-001",
+      "name": "Everyday Checking",
+      "currency": "USD",
+      "balance": "2431.08",
+      "available-balance": "2401.08",
+      "balance-date": 1791547200,
+      "transactions": [
+        {
+          "id": "TXN-1001",
+          "posted": 1791288000,
+          "transacted_at": 1791201600,
+          "amount": "-84.32",
+          "description": "TRADER JOE'S #512 BROOKLYN NY",
+          "payee": "Trader Joe's",
+          "memo": ""
+        },
+        {
+          "id": "TXN-1002",
+          "posted": 1791374400,
+          "transacted_at": 1791288000,
+          "amount": "-2.90",
+          "description": "MTA*METROCARD VENDING",
+          "payee": "MTA"
+        },
+        {
+          "id": "TXN-1003",
+          "posted": 0,
+          "transacted_at": 1791720000,
+          "amount": "-18.75",
+          "description": "BLUE BOTTLE COFFEE 1030",
+          "payee": "Blue Bottle Coffee",
+          "pending": true
+        },
+        {
+          "id": "TXN-1004",
+          "posted": 1790769600,
+          "transacted_at": 1790769600,
+          "amount": "3200.00",
+          "description": "DIRECT DEPOSIT - ACME CORP PAYROLL",
+          "payee": "Acme Corp"
+        }
+      ]
+    },
+    {
+      "org": { "domain": "mycard.example.com", "name": "My Card", "sfin-url": "https://bridge.simplefin.org/simplefin" },
+      "id": "ACT-credit-002",
+      "name": "Rewards Visa",
+      "currency": "USD",
+      "balance": "-642.19",
+      "balance-date": 1791547200,
+      "transactions": [
+        {
+          "id": "TXN-2001",
+          "posted": 1791460800,
+          "transacted_at": 1791374400,
+          "amount": "-15.99",
+          "description": "NETFLIX.COM",
+          "payee": "Netflix"
+        },
+        {
+          "id": "TXN-2002",
+          "posted": 0,
+          "transacted_at": 1791547200,
+          "amount": "-47.11",
+          "description": "UBER TRIP HELP.UBER.COM",
+          "payee": "Uber",
+          "pending": true
+        },
+        {
+          "id": "TXN-2003",
+          "posted": 1788955200,
+          "transacted_at": 1788868800,
+          "amount": "-129.40",
+          "description": "ZARA US 4471 SOHO",
+          "payee": "Zara"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "errors": [],
+  "accounts": [
+    {
+      "org": { "domain": "mybank.example.com", "name": "My Bank" },
+      "id": "ACT-debit-001",
+      "name": "Everyday Checking",
+      "currency": "USD",
+      "balance": "2412.33",
+      "transactions": [
+        {
+          "id": "TXN-1003",
+          "posted": 1791892800,
+          "transacted_at": 1791720000,
+          "amount": "-21.25",
+          "description": "BLUE BOTTLE COFFEE 1030",
+          "payee": "Blue Bottle Coffee",
+          "pending": false
+        }
+      ]
+    }
+  ]
+}
