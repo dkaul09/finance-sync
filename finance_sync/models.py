@@ -18,6 +18,7 @@ class Category(StrEnum):
     TRANSIT = "transit"
     SHOPPING = "shopping"
     UTILITIES = "utilities"
+    RENT = "rent"
     SUBSCRIPTIONS = "subscriptions"
     HEALTH = "health"
     ENTERTAINMENT = "entertainment"

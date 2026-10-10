@@ -103,6 +103,30 @@ class GoogleSheetsBackend(SheetsBackend):  # pragma: no cover - network transpor
         files = response.get("files", [])
         return files[0]["id"] if files else None
 
+    def list_spreadsheets(self, folder_id: str) -> list[tuple[str, str]]:
+        query = (
+            f"mimeType = '{SPREADSHEET_MIME}' and '{folder_id}' in parents "
+            f"and trashed = false"
+        )
+        out: list[tuple[str, str]] = []
+        page_token = None
+        while True:
+            response = (
+                self._drive.files()
+                .list(
+                    q=query,
+                    fields="nextPageToken, files(id, name)",
+                    pageSize=100,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+            out.extend((f["name"], f["id"]) for f in response.get("files", []))
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+        return out
+
     def create_spreadsheet(
         self, folder_id: str, title: str, tabs: dict[str, list[str]]
     ) -> str:

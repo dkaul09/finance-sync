@@ -50,6 +50,30 @@ def _print_transactions(transactions: list[Transaction]) -> None:
         print(f"{'':<11} {total:>11}  (net)")
 
 
+def _print_category_breakdown(plans) -> None:
+    """Show where this run's categories came from, so gaps are obvious."""
+    from .rows import TRANSACTION_COLUMNS
+
+    cat_i = TRANSACTION_COLUMNS.index("category")
+    src_i = TRANSACTION_COLUMNS.index("category_source")
+
+    counts: dict[tuple[str, str], int] = {}
+    for plan in plans.values():
+        rows = list(plan.inserts) + [row for _, row in plan.updates]
+        for row in rows:
+            key = (row[cat_i], row[src_i])
+            counts[key] = counts.get(key, 0) + 1
+
+    if not counts:
+        return
+    print("\ncategories written this run:")
+    for (category, source), count in sorted(counts.items(), key=lambda kv: -kv[1]):
+        print(f"  {category:<14} {source:<10} {count}")
+    unresolved = sum(c for (_, src), c in counts.items() if src == "none")
+    if unresolved:
+        print(f"  -> {unresolved} unresolved; add Overrides rows or enable USE_JEV")
+
+
 def _date_range(days: int) -> tuple[dt.date, dt.date]:
     end = dt.date.today()
     return end - dt.timedelta(days=days - 1), end
@@ -120,6 +144,8 @@ def _run_sync(config: Config, args, days: int) -> int:
         print(plan.describe())
         for key in totals:
             totals[key] += plan.counts[key]
+
+    _print_category_breakdown(plans)
 
     verb = "would change" if args.dry_run else "applied"
     print(

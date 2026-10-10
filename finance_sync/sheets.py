@@ -6,6 +6,7 @@ import datetime as dt
 import logging
 from typing import Protocol
 
+from .categorize import LayeredCategorizer, apply_results, parse_overrides
 from .models import Transaction
 from .rows import OVERRIDE_COLUMNS, REVIEW_COLUMNS, TRANSACTION_COLUMNS
 from .upsert import UpsertPlan, plan_upsert
@@ -36,6 +37,8 @@ class SheetsBackend(Protocol):
     def find_spreadsheet(self, folder_id: str, title: str) -> str | None: ...
 
     def create_spreadsheet(self, folder_id: str, title: str, tabs: dict[str, list[str]]) -> str: ...
+
+    def list_spreadsheets(self, folder_id: str) -> list[tuple[str, str]]: ...
 
     def read_tab(self, spreadsheet_id: str, tab: str) -> list[list[str]]: ...
 
@@ -77,10 +80,54 @@ class SheetsSync:
             return existing
 
         logger.info("Creating spreadsheet %s", title)
-        return self._backend.create_spreadsheet(folder_id, title, TAB_HEADERS)
+        spreadsheet_id = self._backend.create_spreadsheet(folder_id, title, TAB_HEADERS)
+        self._carry_overrides_forward(folder_id, spreadsheet_id, month_key)
+        return spreadsheet_id
 
-    def plan(self, transactions: list[Transaction], now: dt.datetime | None = None) -> dict[str, UpsertPlan]:
-        """Build one plan per target month. Reads, never writes."""
+    def _carry_overrides_forward(
+        self, folder_id: str, spreadsheet_id: str, month_key: str
+    ) -> None:
+        """Copy the newest earlier month's Overrides into a fresh spreadsheet.
+
+        Overrides are hand-maintained, so a per-month tab would silently reset
+        every rollover and the "never ask about this merchant again" promise
+        would last at most 31 days.
+        """
+        previous = self._latest_previous_spreadsheet(folder_id, month_key)
+        if previous is None:
+            return
+        rows = self._backend.read_tab(previous, OVERRIDES_TAB)
+        body = rows[1:] if rows else []
+        body = [r for r in body if any((c or "").strip() for c in r)]
+        if not body:
+            return
+        logger.info("Carrying %s override(s) forward into %s", len(body), month_key)
+        self._backend.append_rows(spreadsheet_id, OVERRIDES_TAB, body)
+
+    def _latest_previous_spreadsheet(self, folder_id: str, month_key: str) -> str | None:
+        """The most recent `Finances YYYY-MM` strictly before `month_key`."""
+        candidates = []
+        for title, sid in self._backend.list_spreadsheets(folder_id):
+            if not title.startswith("Finances "):
+                continue
+            other = title.removeprefix("Finances ").strip()
+            if len(other) == 7 and other < month_key:
+                candidates.append((other, sid))
+        if not candidates:
+            return None
+        return max(candidates)[1]
+
+    def plan(
+        self,
+        transactions: list[Transaction],
+        now: dt.datetime | None = None,
+        categorizer_factory=None,
+    ) -> dict[str, UpsertPlan]:
+        """Categorize then diff, one plan per target month. Reads, never writes.
+
+        Overrides are read per spreadsheet, so each month's rules come from
+        that month's own tab (seeded from the previous month on creation).
+        """
         by_month: dict[str, list[Transaction]] = {}
         for txn in transactions:
             by_month.setdefault(txn.month_key, []).append(txn)
@@ -88,9 +135,21 @@ class SheetsSync:
         plans: dict[str, UpsertPlan] = {}
         for month_key in sorted(by_month):
             spreadsheet_id = self.spreadsheet_for(month_key)
+
+            override_rows = self._backend.read_tab(spreadsheet_id, OVERRIDES_TAB)
+            overrides = parse_overrides(override_rows[1:] if override_rows else [])
+
+            if categorizer_factory is not None:
+                categorizer = categorizer_factory(overrides)
+            else:
+                categorizer = LayeredCategorizer(overrides=overrides)
+
+            month_txns = by_month[month_key]
+            categorized = apply_results(month_txns, categorizer.categorize(month_txns))
+
             existing = self._backend.read_tab(spreadsheet_id, TRANSACTIONS_TAB)
             body = existing[1:] if existing else []
-            plans[month_key] = plan_upsert(body, by_month[month_key], now=now)
+            plans[month_key] = plan_upsert(body, categorized, now=now)
         return plans
 
     def apply(self, plans: dict[str, UpsertPlan]) -> None:
@@ -106,8 +165,13 @@ class SheetsSync:
             if month_plan.inserts:
                 self._backend.append_rows(spreadsheet_id, TRANSACTIONS_TAB, month_plan.inserts)
 
-    def sync(self, transactions: list[Transaction], now: dt.datetime | None = None) -> dict[str, UpsertPlan]:
-        plans = self.plan(transactions, now=now)
+    def sync(
+        self,
+        transactions: list[Transaction],
+        now: dt.datetime | None = None,
+        categorizer_factory=None,
+    ) -> dict[str, UpsertPlan]:
+        plans = self.plan(transactions, now=now, categorizer_factory=categorizer_factory)
         self.apply(plans)
         return plans
 
@@ -115,3 +179,8 @@ class SheetsSync:
         spreadsheet_id = self.spreadsheet_for(month_key)
         rows = self._backend.read_tab(spreadsheet_id, OVERRIDES_TAB)
         return rows[1:] if rows else []
+
+    def append_overrides(self, month_key: str, rows: list[list[str]]) -> None:
+        if not rows or self._dry_run:
+            return
+        self._backend.append_rows(self.spreadsheet_for(month_key), OVERRIDES_TAB, rows)

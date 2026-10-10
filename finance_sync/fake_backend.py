@@ -41,6 +41,14 @@ class FakeSheetsBackend(SheetsBackend):
         self.created_spreadsheets.append(title)
         return sid
 
+    def list_spreadsheets(self, folder_id: str) -> list[tuple[str, str]]:
+        self.call_log.append(f"list:{folder_id}")
+        return [
+            (title, sid)
+            for sid, title in self.titles.items()
+            if self.parents.get(sid) == folder_id
+        ]
+
     def read_tab(self, spreadsheet_id: str, tab: str) -> list[list[str]]:
         self.call_log.append(f"read:{spreadsheet_id}:{tab}")
         return [list(r) for r in self.spreadsheets[spreadsheet_id].get(tab, [])]

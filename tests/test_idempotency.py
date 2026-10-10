@@ -59,6 +59,22 @@ def column(row: list[str], name: str) -> str:
     return row[TRANSACTION_COLUMNS.index(name)]
 
 
+class _PassThrough:
+    """Keeps whatever category a test set, so upsert can be tested in isolation."""
+
+    def categorize(self, transactions):
+        from finance_sync.models import CategoryResult
+
+        return [
+            CategoryResult(t.transaction_id, t.category, t.category_source)
+            for t in transactions
+        ]
+
+
+def keep_categories(_overrides=None) -> _PassThrough:
+    return _PassThrough()
+
+
 class TestSamePayloadTwice:
     def test_second_run_inserts_nothing(self, sync, backend):
         batch = [txn("TXN-1"), txn("TXN-2", amount="-20.00")]
@@ -222,8 +238,10 @@ class TestManualCategoryIsNeverOverwritten:
 
     def test_non_manual_category_is_allowed_to_change(self, sync, backend):
         """Only `manual` is protected; a rules result may be corrected."""
-        sync.sync([txn("TXN-1", category=Category.OTHER, source=CategorySource.RULES)], now=NOW)
-        sync.sync([txn("TXN-1", category=Category.GROCERIES, source=CategorySource.RULES)], now=LATER)
+        sync.sync([txn("TXN-1", category=Category.OTHER, source=CategorySource.RULES)],
+                  now=NOW, categorizer_factory=keep_categories)
+        sync.sync([txn("TXN-1", category=Category.GROCERIES, source=CategorySource.RULES)],
+                  now=LATER, categorizer_factory=keep_categories)
         row = backend.data_rows(spreadsheet_title("2026-10"))[0]
         assert column(row, "category") == "groceries"
 
@@ -288,7 +306,7 @@ class TestDryRun:
 class TestRoundTrip:
     def test_a_written_row_parses_back_to_the_same_transaction(self, sync, backend):
         original = txn("TXN-1", amount="-84.32", category=Category.GROCERIES, source=CategorySource.RULES)
-        sync.sync([original], now=NOW)
+        sync.sync([original], now=NOW, categorizer_factory=keep_categories)
         row = backend.data_rows(spreadsheet_title("2026-10"))[0]
         parsed = row_to_transaction(row)
         assert parsed is not None
@@ -350,3 +368,58 @@ class TestHandEditedSheetTolerance:
         row = ["TXN-1", "2026-10-05", "", "acct", "desc", "$1,234.56"]
         parsed = row_to_transaction(row)
         assert parsed is not None and parsed.amount == Decimal("1234.56")
+
+
+class TestOverridesSurviveMonthRollover:
+    """Overrides are hand-maintained; a per-month tab must not reset them."""
+
+    def test_overrides_are_carried_into_a_new_month(self, sync, backend):
+        sync.sync([txn("TXN-SEP", date=dt.date(2026, 9, 10), posted=dt.date(2026, 9, 11))], now=NOW)
+        backend.append_rows(
+            next(s for s, t in backend.titles.items() if t == "Finances 2026-09"),
+            "Overrides",
+            [["TARGET", "groceries", "FALSE"], ["USC HOSPITALITY", "restaurants", "FALSE"]],
+        )
+
+        sync.sync([txn("TXN-OCT", date=dt.date(2026, 10, 2), posted=dt.date(2026, 10, 3))], now=NOW)
+
+        carried = backend.tab("Finances 2026-10", "Overrides")[1:]
+        assert [r[0] for r in carried] == ["TARGET", "USC HOSPITALITY"]
+
+    def test_the_newest_previous_month_is_the_source(self, backend):
+        s = SheetsSync(backend, folder_name="Finances")
+        s.sync([txn("A", date=dt.date(2026, 8, 5), posted=dt.date(2026, 8, 6))], now=NOW)
+        s.sync([txn("B", date=dt.date(2026, 9, 5), posted=dt.date(2026, 9, 6))], now=NOW)
+        backend.append_rows(
+            next(i for i, t in backend.titles.items() if t == "Finances 2026-08"),
+            "Overrides", [["OLD", "fees", "FALSE"]])
+        backend.append_rows(
+            next(i for i, t in backend.titles.items() if t == "Finances 2026-09"),
+            "Overrides", [["NEW", "rent", "FALSE"]])
+
+        s.sync([txn("C", date=dt.date(2026, 10, 5), posted=dt.date(2026, 10, 6))], now=NOW)
+        carried = [r[0] for r in backend.tab("Finances 2026-10", "Overrides")[1:]]
+        assert carried == ["NEW"]
+
+    def test_a_later_month_is_not_used_as_the_source(self, backend):
+        """Backfilling an older month must not inherit from a newer one."""
+        s = SheetsSync(backend, folder_name="Finances")
+        s.sync([txn("A", date=dt.date(2026, 10, 5), posted=dt.date(2026, 10, 6))], now=NOW)
+        backend.append_rows(
+            next(i for i, t in backend.titles.items() if t == "Finances 2026-10"),
+            "Overrides", [["FUTURE", "fees", "FALSE"]])
+
+        s.sync([txn("B", date=dt.date(2026, 9, 5), posted=dt.date(2026, 9, 6))], now=NOW)
+        assert backend.tab("Finances 2026-09", "Overrides")[1:] == []
+
+    def test_no_previous_month_is_not_an_error(self, sync, backend):
+        sync.sync([txn("TXN-1")], now=NOW)
+        assert backend.tab("Finances 2026-10", "Overrides")[1:] == []
+
+    def test_blank_override_rows_are_not_carried(self, sync, backend):
+        sync.sync([txn("A", date=dt.date(2026, 9, 5), posted=dt.date(2026, 9, 6))], now=NOW)
+        backend.append_rows(
+            next(i for i, t in backend.titles.items() if t == "Finances 2026-09"),
+            "Overrides", [["", "", ""], ["REAL", "fees", "FALSE"]])
+        sync.sync([txn("B", date=dt.date(2026, 10, 5), posted=dt.date(2026, 10, 6))], now=NOW)
+        assert [r[0] for r in backend.tab("Finances 2026-10", "Overrides")[1:]] == ["REAL"]
