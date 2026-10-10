@@ -9,23 +9,61 @@ from enum import StrEnum
 
 
 class Category(StrEnum):
-    """The fixed category enum. Nothing outside this set is ever written."""
+    """The fixed category enum, matching the user's budget lines.
+
+    `INCOME` and `TRANSFER` are not budget lines: money in and money moved
+    between accounts are not spending, and including them would make the
+    budget totals meaningless. They appear on Transactions and are excluded
+    from the Budget tab.
+    """
 
     GROCERIES = "groceries"
-    RESTAURANTS = "restaurants"
-    COFFEE = "coffee"
-    TRAVEL = "travel"
-    TRANSIT = "transit"
-    SHOPPING = "shopping"
+    LAUNDRY = "laundry"
+    PROTEIN_SHAKE = "protein_shake"
+    RENT_AND_INSURANCE = "rent_and_insurance"
+    MOBILE = "mobile"
+    PERSONAL = "personal"
+    PETS = "pets"
     UTILITIES = "utilities"
-    RENT = "rent"
-    SUBSCRIPTIONS = "subscriptions"
-    HEALTH = "health"
-    ENTERTAINMENT = "entertainment"
+    TRAVEL = "travel"
+    HAIRCUT = "haircut"
+    GPT = "gpt"
+    STARBUCKS_COFFEE = "starbucks_coffee"
+    COFFEE_PODS = "coffee_pods"
+    OUTSIDE_FOOD = "outside_food"
+    MISCL = "miscl"
+    SK = "sk"
+
+    # Not budget lines.
     INCOME = "income"
     TRANSFER = "transfer"
-    FEES = "fees"
-    OTHER = "other"
+
+
+#: Budget lines in the order they appear on the Budget tab, with the display
+#: name and the default planned amount taken from the user's existing budget.
+BUDGET_LINES: list[tuple["Category", str, str]] = [
+    (Category.GROCERIES, "Groceries", "152"),
+    (Category.LAUNDRY, "Laundry", "20"),
+    (Category.PROTEIN_SHAKE, "Protein Shake", "30"),
+    (Category.RENT_AND_INSURANCE, "Rent and Insurance", "1355"),
+    (Category.MOBILE, "Mobile", "40"),
+    (Category.PERSONAL, "Personal", "110"),
+    (Category.PETS, "Pets", "0"),
+    (Category.UTILITIES, "Utilities", "15"),
+    (Category.TRAVEL, "Travel", "0"),
+    (Category.HAIRCUT, "Haircut", "29"),
+    (Category.GPT, "GPT", "20"),
+    (Category.STARBUCKS_COFFEE, "Starbucks Coffee", "15"),
+    (Category.COFFEE_PODS, "Coffee Pods", "50"),
+    (Category.OUTSIDE_FOOD, "Outside food", "30"),
+    (Category.MISCL, "MISCL", "50"),
+    (Category.SK, "SK", "100"),
+]
+
+#: Categories excluded from budget totals.
+NON_BUDGET = {Category.INCOME, Category.TRANSFER}
+
+DISPLAY_NAMES = {category: name for category, name, _ in BUDGET_LINES}
 
 
 class CategorySource(StrEnum):
@@ -52,7 +90,7 @@ class Transaction:
     #: Not written to the sheet; rules run on freshly fetched transactions.
     payee: str = ""
     posted_date: dt.date | None = None
-    category: Category = Category.OTHER
+    category: Category = Category.MISCL
     pending: bool = False
     category_source: CategorySource = CategorySource.NONE
     confidence: float | None = None

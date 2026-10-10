@@ -161,7 +161,7 @@ def row_to_transaction(row: list[str]) -> Transaction | None:
         account=(cells["account"] or "").strip(),
         description=(cells["description"] or "").strip(),
         amount=_parse_decimal(cells["amount"]),
-        category=_enum(cells["category"], Category, Category.OTHER),
+        category=_enum(cells["category"], Category, Category.MISCL),
         pending=_parse_bool(cells["pending"]),
         category_source=_enum(cells["category_source"], CategorySource, CategorySource.NONE),
         confidence=_parse_float(cells["confidence"]),

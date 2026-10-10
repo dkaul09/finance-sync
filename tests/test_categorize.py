@@ -52,19 +52,21 @@ class TestSeedRules:
         "payee,description,expected",
         [
             ("Trader Joe's", "TRADER JOE S #250", Category.GROCERIES),
-            ("Target", "TARGET STORE T3217", Category.SHOPPING),
-            ("Starbucks", "STARBUCKS STORE 25043", Category.COFFEE),
-            ("Uber Eats", "UBER   *EATS", Category.RESTAURANTS),
-            ("Uber", "UBER   *TRIP", Category.TRANSIT),
-            ("Lyft", "LYFT *SHARED 09-20", Category.TRANSIT),
-            ("Hulu", "HULU 877-8244", Category.SUBSCRIPTIONS),
-            ("PlayStation", "VENMO *PLAYSTATION", Category.ENTERTAINMENT),
-            ("Nespresso", "NESPRESSO USA, INC.", Category.COFFEE),
-            ("Under Armour", "UNDER ARMOUR 1234", Category.SHOPPING),
-            ("Tripalink a L E Web", "Tripalink-a1l2E0 WEB PMTS", Category.RENT),
-            ("AppFolio", "AppFolio, Inc. F WEB PMTS", Category.RENT),
-            ("Anthropic", "ANTHROPIC CLAUDE", Category.SUBSCRIPTIONS),
-            ("Supercuts", "Supercuts USC", None),
+            ("Target", "TARGET STORE T3217", Category.PERSONAL),
+            ("Starbucks", "STARBUCKS STORE 25043", Category.STARBUCKS_COFFEE),
+            ("Uber Eats", "UBER   *EATS", Category.OUTSIDE_FOOD),
+            ("Uber", "UBER   *TRIP", Category.TRAVEL),
+            ("Lyft", "LYFT *SHARED 09-20", Category.TRAVEL),
+            ("Hulu", "HULU 877-8244", Category.PERSONAL),
+            ("Drip Daddy West", "DRIP DADDY WEST HOLLYWOO", Category.STARBUCKS_COFFEE),
+            ("Tripalink a L E Web", "Tripalink WEB PMTS", Category.RENT_AND_INSURANCE),
+            ("PlayStation", "VENMO *PLAYSTATION", Category.PERSONAL),
+            ("Nespresso", "NESPRESSO USA, INC.", Category.COFFEE_PODS),
+            ("Under Armour", "UNDER ARMOUR 1234", Category.PERSONAL),
+            ("Tripalink a L E Web", "Tripalink-a1l2E0 WEB PMTS", Category.RENT_AND_INSURANCE),
+            ("AppFolio", "AppFolio, Inc. F WEB PMTS", Category.RENT_AND_INSURANCE),
+            ("Anthropic", "ANTHROPIC CLAUDE", Category.GPT),
+            ("Supercuts", "Supercuts USC", Category.HAIRCUT),
         ],
     )
     def test_real_merchants_from_live_data(self, payee, description, expected):
@@ -72,8 +74,8 @@ class TestSeedRules:
 
     def test_longest_pattern_wins(self):
         """UBER EATS must not be swallowed by the shorter UBER rule."""
-        assert match_rules(txn("Uber Eats", "UBER *EATS")) == Category.RESTAURANTS
-        assert match_rules(txn("Uber", "UBER *TRIP")) == Category.TRANSIT
+        assert match_rules(txn("Uber Eats", "UBER *EATS")) == Category.OUTSIDE_FOOD
+        assert match_rules(txn("Uber", "UBER *TRIP")) == Category.TRAVEL
 
     def test_apostrophe_mismatch_still_matches(self):
         """The bug real data exposed: description drops the apostrophe."""
@@ -86,7 +88,7 @@ class TestSeedRules:
         assert match_rules(txn("Totally Unknown LLC")) is None
 
     def test_description_is_used_when_payee_is_blank(self):
-        assert match_rules(txn("", "NETFLIX.COM")) == Category.SUBSCRIPTIONS
+        assert match_rules(txn("", "NETFLIX.COM")) == Category.PERSONAL
 
     def test_every_seed_category_is_a_real_category(self):
         assert all(isinstance(c, Category) for c in SEED_RULES.values())
@@ -106,20 +108,20 @@ class TestOverrides:
         assert result.source == CategorySource.OVERRIDE
 
     def test_override_matches_the_raw_description_too(self):
-        cat = LayeredCategorizer(overrides=[Override("T3217", Category.HEALTH)])
-        assert cat.categorize([txn("Target", "TARGET STORE T3217")])[0].category == Category.HEALTH
+        cat = LayeredCategorizer(overrides=[Override("T3217", Category.PERSONAL)])
+        assert cat.categorize([txn("Target", "TARGET STORE T3217")])[0].category == Category.PERSONAL
 
     def test_regex_override(self):
         cat = LayeredCategorizer(
-            overrides=[Override(r"USC\s+HOSPITALITY", Category.RESTAURANTS, is_regex=True)]
+            overrides=[Override(r"USC\s+HOSPITALITY", Category.OUTSIDE_FOOD, is_regex=True)]
         )
         result = cat.categorize([txn("Usc Hospitality Retail", "USC HOSPITALITY RETAIL")])[0]
-        assert result.category == Category.RESTAURANTS
+        assert result.category == Category.OUTSIDE_FOOD
         assert result.source == CategorySource.OVERRIDE
 
     def test_an_invalid_regex_is_skipped_not_fatal(self):
         """A bad hand-written regex must not break the nightly run."""
-        cat = LayeredCategorizer(overrides=[Override("(unclosed", Category.FEES, is_regex=True)])
+        cat = LayeredCategorizer(overrides=[Override("(unclosed", Category.MISCL, is_regex=True)])
         result = cat.categorize([txn("Trader Joe's", "TRADER JOE S #250")])[0]
         assert result.category == Category.GROCERIES
 
@@ -127,14 +129,14 @@ class TestOverrides:
         cat = LayeredCategorizer(
             overrides=[
                 Override("TARGET", Category.GROCERIES),
-                Override("TARGET", Category.HEALTH),
+                Override("TARGET", Category.PERSONAL),
             ]
         )
         assert cat.categorize([txn("Target")])[0].category == Category.GROCERIES
 
     def test_apostrophe_insensitive_override(self):
-        cat = LayeredCategorizer(overrides=[Override("Trader Joe's", Category.RESTAURANTS)])
-        assert cat.categorize([txn("", "TRADER JOE S #250")])[0].category == Category.RESTAURANTS
+        cat = LayeredCategorizer(overrides=[Override("Trader Joe's", Category.OUTSIDE_FOOD)])
+        assert cat.categorize([txn("", "TRADER JOE S #250")])[0].category == Category.OUTSIDE_FOOD
 
 
 class TestParseOverrides:
@@ -145,30 +147,30 @@ class TestParseOverrides:
         assert parse_overrides([[], ["", "groceries"]]) == []
 
     def test_regex_flag_is_read(self):
-        overrides = parse_overrides([["^UBER", "transit", "TRUE"]])
+        overrides = parse_overrides([["^UBER", "travel", "TRUE"]])
         assert len(overrides) == 1 and overrides[0].is_regex
 
     def test_missing_regex_column_defaults_to_substring(self):
-        overrides = parse_overrides([["UBER", "transit"]])
+        overrides = parse_overrides([["UBER", "travel"]])
         assert len(overrides) == 1 and not overrides[0].is_regex
 
     def test_unknown_category_is_skipped_not_fatal(self):
         assert parse_overrides([["UBER", "brunch"]]) == []
 
     def test_valid_rows_survive_an_invalid_neighbour(self):
-        overrides = parse_overrides([["UBER", "brunch"], ["LYFT", "transit"]])
+        overrides = parse_overrides([["UBER", "brunch"], ["LYFT", "travel"]])
         assert [o.pattern for o in overrides] == ["LYFT"]
 
 
 class TestLayering:
     def test_rules_apply_when_no_override_matches(self):
         result = LayeredCategorizer().categorize([txn("Starbucks")])[0]
-        assert result.category == Category.COFFEE
+        assert result.category == Category.STARBUCKS_COFFEE
         assert result.source == CategorySource.RULES
 
     def test_unresolved_falls_through_to_the_null_categorizer(self):
         result = LayeredCategorizer().categorize([txn("Mystery Merchant")])[0]
-        assert result.category == Category.OTHER
+        assert result.category == Category.MISCL
         assert result.source == CategorySource.NONE
 
     def test_the_fallback_only_sees_unresolved_transactions(self):
@@ -211,7 +213,7 @@ class TestApplyResults:
         batch = [txn("Starbucks")]
         results = LayeredCategorizer().categorize(batch)
         updated = apply_results(batch, results)
-        assert updated[0].category == Category.COFFEE
+        assert updated[0].category == Category.STARBUCKS_COFFEE
         assert updated[0].category_source == CategorySource.RULES
 
     def test_financial_fields_are_untouched(self):
@@ -223,7 +225,7 @@ class TestApplyResults:
     def test_jev_extras_are_carried_through(self):
         batch = [txn("Mystery")]
         results = [
-            CategoryResult("T1", Category.SUBSCRIPTIONS, CategorySource.JEV,
+            CategoryResult("T1", Category.PERSONAL, CategorySource.JEV,
                            confidence=0.91, recurring=0.97, business_expense=0.12)
         ]
         updated = apply_results(batch, results)

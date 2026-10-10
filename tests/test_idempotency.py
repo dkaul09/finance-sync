@@ -38,7 +38,7 @@ def txn(
     amount: str = "-10.00",
     pending: bool = False,
     posted: dt.date | None = dt.date(2026, 10, 6),
-    category: Category = Category.OTHER,
+    category: Category = Category.MISCL,
     source: CategorySource = CategorySource.NONE,
     description: str = "TEST MERCHANT",
 ) -> Transaction:
@@ -187,20 +187,20 @@ class TestAmountChangeOnSettle:
 
 
 class TestManualCategoryIsNeverOverwritten:
-    def _hand_edit(self, backend, *, category="restaurants", source="manual"):
+    def _hand_edit(self, backend, *, category="outside_food", source="manual"):
         """Simulate editing the sheet by hand."""
         rows = backend.data_rows(spreadsheet_title("2026-10"))
         rows[0][TRANSACTION_COLUMNS.index("category")] = category
         rows[0][TRANSACTION_COLUMNS.index("category_source")] = source
 
     def test_manual_category_survives_a_resync(self, sync, backend):
-        sync.sync([txn("TXN-1", category=Category.OTHER, source=CategorySource.RULES)], now=NOW)
+        sync.sync([txn("TXN-1", category=Category.MISCL, source=CategorySource.RULES)], now=NOW)
         self._hand_edit(backend)
 
         sync.sync([txn("TXN-1", category=Category.GROCERIES, source=CategorySource.RULES)], now=LATER)
 
         row = backend.data_rows(spreadsheet_title("2026-10"))[0]
-        assert column(row, "category") == "restaurants"
+        assert column(row, "category") == "outside_food"
         assert column(row, "category_source") == "manual"
 
     def test_manual_row_with_no_other_change_is_unchanged(self, sync, backend):
@@ -212,7 +212,7 @@ class TestManualCategoryIsNeverOverwritten:
 
     def test_manual_category_survives_pending_to_posted(self, sync, backend):
         sync.sync([txn("TXN-1", pending=True, amount="-18.75", source=CategorySource.RULES)], now=NOW)
-        self._hand_edit(backend, category="coffee")
+        self._hand_edit(backend, category="starbucks_coffee")
 
         sync.sync(
             [txn("TXN-1", pending=False, posted=dt.date(2026, 10, 13),
@@ -221,7 +221,7 @@ class TestManualCategoryIsNeverOverwritten:
         )
 
         row = backend.data_rows(spreadsheet_title("2026-10"))[0]
-        assert column(row, "category") == "coffee"
+        assert column(row, "category") == "starbucks_coffee"
         assert column(row, "category_source") == "manual"
         # ...while the financial fields still move.
         assert column(row, "amount") == "-21.25"
@@ -230,15 +230,15 @@ class TestManualCategoryIsNeverOverwritten:
 
     def test_manual_category_survives_many_runs(self, sync, backend):
         sync.sync([txn("TXN-1", source=CategorySource.RULES)], now=NOW)
-        self._hand_edit(backend, category="health")
+        self._hand_edit(backend, category="haircut")
         for _ in range(5):
-            sync.sync([txn("TXN-1", category=Category.SHOPPING, source=CategorySource.RULES)], now=LATER)
+            sync.sync([txn("TXN-1", category=Category.PERSONAL, source=CategorySource.RULES)], now=LATER)
         row = backend.data_rows(spreadsheet_title("2026-10"))[0]
-        assert column(row, "category") == "health"
+        assert column(row, "category") == "haircut"
 
     def test_non_manual_category_is_allowed_to_change(self, sync, backend):
         """Only `manual` is protected; a rules result may be corrected."""
-        sync.sync([txn("TXN-1", category=Category.OTHER, source=CategorySource.RULES)],
+        sync.sync([txn("TXN-1", category=Category.MISCL, source=CategorySource.RULES)],
                   now=NOW, categorizer_factory=keep_categories)
         sync.sync([txn("TXN-1", category=Category.GROCERIES, source=CategorySource.RULES)],
                   now=LATER, categorizer_factory=keep_categories)
@@ -271,10 +271,12 @@ class TestMonthRouting:
         sync.sync([txn("TXN-2", amount="-5.00")], now=LATER)
         assert list(backend.folders) == ["Finances"]
 
-    def test_new_spreadsheet_has_all_three_tabs(self, sync, backend):
+    def test_new_spreadsheet_has_all_four_tabs(self, sync, backend):
         sync.sync([txn("TXN-1")], now=NOW)
         sid = next(s for s, t in backend.titles.items() if t == "Finances 2026-10")
-        assert set(backend.spreadsheets[sid]) == {"Transactions", "Review", "Overrides"}
+        assert set(backend.spreadsheets[sid]) == {
+            "Transactions", "Budget", "Review", "Overrides"
+        }
 
     def test_new_spreadsheet_has_a_header_row(self, sync, backend):
         sync.sync([txn("TXN-1")], now=NOW)
@@ -362,7 +364,7 @@ class TestHandEditedSheetTolerance:
         rows = backend.data_rows(spreadsheet_title("2026-10"))
         rows[0][TRANSACTION_COLUMNS.index("category")] = "brunch money"
         parsed = row_to_transaction(rows[0])
-        assert parsed is not None and parsed.category == Category.OTHER
+        assert parsed is not None and parsed.category == Category.MISCL
 
     def test_currency_formatted_amount_is_parsed(self):
         row = ["TXN-1", "2026-10-05", "", "acct", "desc", "$1,234.56"]
@@ -378,7 +380,7 @@ class TestOverridesSurviveMonthRollover:
         backend.append_rows(
             next(s for s, t in backend.titles.items() if t == "Finances 2026-09"),
             "Overrides",
-            [["TARGET", "groceries", "FALSE"], ["USC HOSPITALITY", "restaurants", "FALSE"]],
+            [["TARGET", "groceries", "FALSE"], ["USC HOSPITALITY", "outside_food", "FALSE"]],
         )
 
         sync.sync([txn("TXN-OCT", date=dt.date(2026, 10, 2), posted=dt.date(2026, 10, 3))], now=NOW)
@@ -392,10 +394,10 @@ class TestOverridesSurviveMonthRollover:
         s.sync([txn("B", date=dt.date(2026, 9, 5), posted=dt.date(2026, 9, 6))], now=NOW)
         backend.append_rows(
             next(i for i, t in backend.titles.items() if t == "Finances 2026-08"),
-            "Overrides", [["OLD", "fees", "FALSE"]])
+            "Overrides", [["OLD", "miscl", "FALSE"]])
         backend.append_rows(
             next(i for i, t in backend.titles.items() if t == "Finances 2026-09"),
-            "Overrides", [["NEW", "rent", "FALSE"]])
+            "Overrides", [["NEW", "rent_and_insurance", "FALSE"]])
 
         s.sync([txn("C", date=dt.date(2026, 10, 5), posted=dt.date(2026, 10, 6))], now=NOW)
         carried = [r[0] for r in backend.tab("Finances 2026-10", "Overrides")[1:]]
@@ -407,7 +409,7 @@ class TestOverridesSurviveMonthRollover:
         s.sync([txn("A", date=dt.date(2026, 10, 5), posted=dt.date(2026, 10, 6))], now=NOW)
         backend.append_rows(
             next(i for i, t in backend.titles.items() if t == "Finances 2026-10"),
-            "Overrides", [["FUTURE", "fees", "FALSE"]])
+            "Overrides", [["FUTURE", "miscl", "FALSE"]])
 
         s.sync([txn("B", date=dt.date(2026, 9, 5), posted=dt.date(2026, 9, 6))], now=NOW)
         assert backend.tab("Finances 2026-09", "Overrides")[1:] == []
@@ -420,7 +422,7 @@ class TestOverridesSurviveMonthRollover:
         sync.sync([txn("A", date=dt.date(2026, 9, 5), posted=dt.date(2026, 9, 6))], now=NOW)
         backend.append_rows(
             next(i for i, t in backend.titles.items() if t == "Finances 2026-09"),
-            "Overrides", [["", "", ""], ["REAL", "fees", "FALSE"]])
+            "Overrides", [["", "", ""], ["REAL", "miscl", "FALSE"]])
         sync.sync([txn("B", date=dt.date(2026, 10, 5), posted=dt.date(2026, 10, 6))], now=NOW)
         assert [r[0] for r in backend.tab("Finances 2026-10", "Overrides")[1:]] == ["REAL"]
 

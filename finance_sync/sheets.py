@@ -6,9 +6,11 @@ import datetime as dt
 import logging
 from typing import Protocol
 
+from .budget import BUDGET_COLUMNS, FIRST_LINE_ROW, build_rows, default_rows
 from .categorize import LayeredCategorizer, apply_results, parse_overrides
 from .models import Transaction
 from .rows import OVERRIDE_COLUMNS, REVIEW_COLUMNS, TRANSACTION_COLUMNS
+from .rows import row_to_transaction
 from .upsert import UpsertPlan, plan_upsert
 
 logger = logging.getLogger(__name__)
@@ -16,9 +18,11 @@ logger = logging.getLogger(__name__)
 TRANSACTIONS_TAB = "Transactions"
 REVIEW_TAB = "Review"
 OVERRIDES_TAB = "Overrides"
+BUDGET_TAB = "Budget"
 
 TAB_HEADERS = {
     TRANSACTIONS_TAB: TRANSACTION_COLUMNS,
+    BUDGET_TAB: BUDGET_COLUMNS,
     REVIEW_TAB: REVIEW_COLUMNS,
     OVERRIDES_TAB: OVERRIDE_COLUMNS,
 }
@@ -41,6 +45,10 @@ class SheetsBackend(Protocol):
     def create_spreadsheet(self, folder_id: str, title: str, tabs: dict[str, list[str]]) -> str: ...
 
     def list_spreadsheets(self, folder_id: str) -> list[tuple[str, str]]: ...
+
+    def list_tabs(self, spreadsheet_id: str) -> list[str]: ...
+
+    def add_tab(self, spreadsheet_id: str, name: str, header: list[str]) -> None: ...
 
     def read_tab(self, spreadsheet_id: str, tab: str) -> list[list[str]]: ...
 
@@ -93,6 +101,8 @@ class SheetsSync:
         """
         spreadsheet_id = self.find_spreadsheet(month_key)
         if spreadsheet_id is not None:
+            if not self._dry_run:
+                self._ensure_tabs(spreadsheet_id)
             return spreadsheet_id
 
         folder_id = self._folder()
@@ -101,7 +111,42 @@ class SheetsSync:
         logger.info("Creating spreadsheet %s", title)
         spreadsheet_id = self._backend.create_spreadsheet(folder_id, title, TAB_HEADERS)
         self._carry_overrides_forward(folder_id, spreadsheet_id, month_key)
+        self._seed_budget(folder_id, spreadsheet_id, month_key)
         return spreadsheet_id
+
+    def _ensure_tabs(self, spreadsheet_id: str) -> None:
+        """Add any tab this version expects but an older spreadsheet lacks.
+
+        Spreadsheets created by an earlier version predate the Budget tab, and
+        reading a missing tab is a hard 400 from the Sheets API. Migrating in
+        place is cheaper than asking the user to delete and re-sync.
+        """
+        existing = set(self._backend.list_tabs(spreadsheet_id))
+        for name, header in TAB_HEADERS.items():
+            if name in existing:
+                continue
+            logger.info("Adding missing %r tab to an existing spreadsheet", name)
+            self._backend.add_tab(spreadsheet_id, name, header)
+            if name == BUDGET_TAB:
+                self._backend.append_rows(spreadsheet_id, BUDGET_TAB, default_rows())
+
+    def _seed_budget(self, folder_id: str, spreadsheet_id: str, month_key: str) -> None:
+        """Populate a new Budget tab, inheriting planned amounts if possible.
+
+        Planned amounts are hand-maintained, so like Overrides they carry
+        forward from the newest earlier month; actuals are not copied, since
+        they belong to that month.
+        """
+        previous = self._latest_previous_spreadsheet(folder_id, month_key)
+        rows = None
+        if previous is not None:
+            earlier = self._backend.read_tab(previous, BUDGET_TAB)
+            if earlier and len(earlier) > 1:
+                rows = build_rows([], existing=earlier[1:])
+                logger.info("Carrying planned budget forward into %s", month_key)
+        if rows is None:
+            rows = default_rows()
+        self._backend.append_rows(spreadsheet_id, BUDGET_TAB, rows)
 
     def _carry_overrides_forward(
         self, folder_id: str, spreadsheet_id: str, month_key: str
@@ -190,7 +235,7 @@ class SheetsSync:
         return plans
 
     def apply(self, plans: dict[str, UpsertPlan]) -> None:
-        """Write each plan back. Two write calls per spreadsheet, at most."""
+        """Write each plan back, then refresh that month's Budget actuals."""
         if self._dry_run:
             logger.info("Dry run: no writes")
             return
@@ -201,6 +246,38 @@ class SheetsSync:
                 self._backend.update_rows(spreadsheet_id, TRANSACTIONS_TAB, month_plan.updates)
             if month_plan.inserts:
                 self._backend.append_rows(spreadsheet_id, TRANSACTIONS_TAB, month_plan.inserts)
+            self.refresh_budget(spreadsheet_id)
+
+    def refresh_budget(self, spreadsheet_id: str) -> list[list[str]]:
+        """Recompute Planned vs Actual from the whole Transactions tab.
+
+        Actuals are derived from what is in the sheet, not from this run's
+        batch, so a partial sync can never produce a partial month total.
+        Planned amounts already in the tab are preserved.
+        """
+        rows = self._backend.read_tab(spreadsheet_id, TRANSACTIONS_TAB)
+        transactions = [
+            parsed
+            for row in (rows[1:] if rows else [])
+            if (parsed := row_to_transaction(row)) is not None
+        ]
+
+        existing = self._backend.read_tab(spreadsheet_id, BUDGET_TAB)
+        existing_body = existing[1:] if existing else []
+        body = build_rows(transactions, existing=existing_body)
+
+        # Only write when something actually moved. last_updated is excluded
+        # from the comparison for the same reason it is on Transactions:
+        # restamping it every run would make every sync a write.
+        def significant(rows: list[list[str]]) -> list[list[str]]:
+            return [row[:5] for row in rows]
+
+        if significant(existing_body) == significant(body):
+            return body
+
+        updates = [(FIRST_LINE_ROW - 1 + i, row) for i, row in enumerate(body)]
+        self._backend.update_rows(spreadsheet_id, BUDGET_TAB, updates)
+        return body
 
     def sync(
         self,
@@ -211,6 +288,11 @@ class SheetsSync:
         plans = self.plan(transactions, now=now, categorizer_factory=categorizer_factory)
         self.apply(plans)
         return plans
+
+    def budget_rows(self, spreadsheet_id: str) -> list[list[str]]:
+        """The Budget tab body, for display."""
+        rows = self._backend.read_tab(spreadsheet_id, BUDGET_TAB)
+        return rows[1:] if rows else []
 
     def read_overrides(self, month_key: str) -> list[list[str]]:
         spreadsheet_id = self.spreadsheet_for(month_key)

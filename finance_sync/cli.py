@@ -75,6 +75,32 @@ def _print_category_breakdown(plans) -> None:
         print(f"  -> {unresolved} unresolved; add Overrides rows or enable USE_JEV")
 
 
+def _print_budget(sheets, plans) -> None:
+    """Show Planned vs Actual for each month this run touched."""
+    from .budget import BUDGET_COLUMNS
+
+    for month_key in sorted(plans):
+        spreadsheet_id = sheets.find_spreadsheet(month_key)
+        if spreadsheet_id is None:
+            continue
+        rows = sheets.budget_rows(spreadsheet_id)
+        if not rows:
+            continue
+        p_i = BUDGET_COLUMNS.index("planned")
+        a_i = BUDGET_COLUMNS.index("actual")
+        d_i = BUDGET_COLUMNS.index("difference")
+
+        print(f"\nBudget {month_key}:")
+        print(f"  {'line':<20} {'planned':>10} {'actual':>10} {'diff':>10}")
+        print("  " + "-" * 52)
+        for row in rows:
+            label = row[1]
+            marker = "  <<" if label != "Totals" and float(row[d_i] or 0) > 0 else ""
+            print(f"  {label:<20} {row[p_i]:>10} {row[a_i]:>10} {row[d_i]:>10}{marker}")
+            if label == "Totals":
+                print("  " + "-" * 52)
+
+
 def _date_range(days: int) -> tuple[dt.date, dt.date]:
     end = dt.date.today()
     return end - dt.timedelta(days=days - 1), end
@@ -147,6 +173,8 @@ def _run_sync(config: Config, args, days: int) -> int:
             totals[key] += plan.counts[key]
 
     _print_category_breakdown(plans)
+    if not args.dry_run:
+        _print_budget(sheets, plans)
 
     verb = "would change" if args.dry_run else "applied"
     print(

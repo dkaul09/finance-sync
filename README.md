@@ -9,7 +9,7 @@ to be on.
 - One spreadsheet per month, `Finances YYYY-MM`, in a Drive folder called
   `Finances`. Both are created automatically if missing, so month rollover
   needs no intervention.
-- Three tabs per spreadsheet: `Transactions`, `Review`, `Overrides`.
+- Four tabs per spreadsheet: `Transactions`, `Budget`, `Review`, `Overrides`.
 - Transactions are filed by their **transaction date**, so a run on the 1st puts
   the previous month's stragglers in the previous month's sheet.
 - Upserts on `transaction_id`. Running twice a day never duplicates; a pending
@@ -223,9 +223,26 @@ The **longest** matching pattern wins, which is what keeps `UBER EATS`
 `Overrides` rows are **carried forward** into each new month's spreadsheet, so
 hand-maintained rules survive rollover.
 
-Categories: `groceries, restaurants, coffee, travel, transit, shopping,
-utilities, rent, subscriptions, health, entertainment, income, transfer, fees,
-other`.
+Categories match the budget lines: `groceries, laundry, protein_shake,
+rent_and_insurance, mobile, personal, pets, utilities, travel, haircut, gpt,
+starbucks_coffee, coffee_pods, outside_food, miscl, sk`, plus `income` and
+`transfer`, which are **not** budget lines and are excluded from budget totals.
+
+## Budget tab
+
+`Planned` vs `Actual` per category, for that month.
+
+- **Planned** is yours to edit. Syncs never overwrite it, and it carries
+  forward into each new month's spreadsheet.
+- **Actual** is recomputed every sync from the whole `Transactions` tab, so a
+  partial sync can never produce a partial total.
+- Actual counts **spending only** — positive amounts are ignored, so a refund
+  or deposit cannot inflate a line — and **includes pending** transactions, so
+  the number reflects today rather than lagging settlement.
+- `income` and `transfer` are excluded, so payroll and a $5,000 withdrawal
+  don't distort the totals.
+
+A run that changes nothing does not rewrite the Budget tab.
 
 ## Development
 

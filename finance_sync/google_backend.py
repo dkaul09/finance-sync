@@ -204,6 +204,29 @@ class GoogleSheetsBackend(SheetsBackend):  # pragma: no cover - network transpor
         return spreadsheet_id
 
     # -- Sheets -----------------------------------------------------------
+    def list_tabs(self, spreadsheet_id: str) -> list[str]:
+        meta = (
+            self._sheets.spreadsheets()
+            .get(spreadsheetId=spreadsheet_id, fields="sheets.properties.title")
+            .execute()
+        )
+        return [s["properties"]["title"] for s in meta.get("sheets", [])]
+
+    def add_tab(self, spreadsheet_id: str, name: str, header: list[str]) -> None:
+        self._sheets.spreadsheets().batchUpdate(
+            spreadsheetId=spreadsheet_id,
+            body={"requests": [{"addSheet": {"properties": {
+                "title": name,
+                "gridProperties": {"frozenRowCount": 1},
+            }}}]},
+        ).execute()
+        self._sheets.spreadsheets().values().update(
+            spreadsheetId=spreadsheet_id,
+            range=f"{name}!A1",
+            valueInputOption="RAW",
+            body={"values": [header]},
+        ).execute()
+
     def read_tab(self, spreadsheet_id: str, tab: str) -> list[list[str]]:
         response = (
             self._sheets.spreadsheets()
