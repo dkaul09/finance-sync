@@ -79,13 +79,32 @@ This is the only part that cannot be automated. Roughly 10 minutes, once.
    | Contact Information | your own email |
    | Finish | tick *I agree to the Google API Services: User Data Policy* → **Create** |
 
-   Afterwards the platform shows four sections in the left nav: **Overview**,
+   Afterwards the platform shows these sections in the left nav: **Overview**,
    **Branding**, **Audience**, **Data Access**, **Clients**.
+
+   - **Branding** → only three fields are required. Fill these and leave
+     everything else blank:
+
+     | Field | Value | Required? |
+     |---|---|---|
+     | App name | `finance-sync` | **yes** |
+     | User support email | your own address | **yes** |
+     | Developer contact information → Email addresses | your own address | **yes** |
+     | App logo | — | no |
+     | Application home page | — | no |
+     | Privacy policy link | — | no |
+     | Terms of service link | — | no |
+     | Authorized domains | — | no |
+
+     The domain/policy fields are only needed for apps requesting *sensitive*
+     or *restricted* scopes, or serving other people. This app requests
+     neither and serves only you, so leaving them empty is correct — and means
+     you never need to host a privacy policy.
 
    - **Audience** → under *Test users* click **Add users**, add your own Google
      account, **Save**.
-   - **Data Access** → *Add or remove scopes*. You can leave this empty;
-     `scripts/auth.py` requests the scopes it needs at authorization time.
+   - **Data Access** → leave empty. `scripts/auth.py` requests the single scope
+     it needs at authorization time.
 
 4. **Publish the app.** Still on
    [**Audience**](https://console.cloud.google.com/auth/audience), find
@@ -137,9 +156,17 @@ requires file *creation*, so this uses an OAuth refresh token.
 
 #### Scope note
 
-The app requests `drive.file`, not full `drive`: it can only see files it
-created, and never the rest of your Drive. The tradeoff is that it **cannot see
-a `Finances` folder you made by hand** — let it create its own on the first run.
+The app requests exactly one scope, `drive.file`, which covers both the Drive
+and the Sheets calls — the Sheets API accepts it for files the app created.
+
+That choice matters for setup, not just privacy. Google classifies `drive.file`
+as **non-sensitive**, while the obvious-looking `spreadsheets` scope is
+**sensitive**: requesting it would require a privacy policy, a hosted homepage
+and a verification review, for no extra capability here.
+
+It also means the sync can only ever see files it created, never the rest of
+your Drive. The tradeoff is that it **cannot see a `Finances` folder you made by
+hand** — let it create its own on the first run.
 
 ### 3. Configuration
 

@@ -22,14 +22,19 @@ TOKEN_URI = "https://oauth2.googleapis.com/token"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 SPREADSHEET_MIME = "application/vnd.google-apps.spreadsheet"
 
-#: `drive.file` is deliberate: it grants access only to files this app created,
-#: so the sync can never read the rest of your Drive. The consequence is that a
-#: pre-existing hand-made "Finances" folder is invisible to it — let the tool
-#: create its own folder once and it will find it on every later run.
-SCOPES = [
-    "https://www.googleapis.com/auth/drive.file",
-    "https://www.googleapis.com/auth/spreadsheets",
-]
+#: `drive.file` alone is deliberate, and it is the only scope requested.
+#:
+#: It covers both the Drive calls and the Sheets calls, because the Sheets API
+#: accepts drive.file for files the app itself created. Google classifies it as
+#: non-sensitive, whereas `spreadsheets` is *sensitive* — requesting that would
+#: drag the consent screen into needing a privacy policy, a hosted homepage and
+#: a verification review, for no added capability here.
+#:
+#: It also grants access only to files this app created, so the sync can never
+#: read the rest of the user's Drive. The consequence is that a pre-existing
+#: hand-made "Finances" folder is invisible to it — let the tool create its own
+#: folder once and it will find it on every later run.
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 
 def column_letter(index: int) -> str:
