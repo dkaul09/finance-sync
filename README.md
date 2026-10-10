@@ -25,8 +25,8 @@ to be on.
 | 1 | SimpleFIN client, models, tests | done, validated on live data |
 | 2 | Sheets layer, create-if-missing, idempotent upsert | done |
 | 3 | Rules categorization, `USE_JEV=false` | done |
-| 4 | Jev behind the flag | not started |
-| 5 | `review` command, scheduling, docs | not started |
+| 4 | Jev behind the flag | done |
+| 5 | `review` command, scheduling, docs | done |
 
 ## Setup
 
@@ -200,7 +200,60 @@ python -m finance_sync.cli sync --fake-sheets
 
 # Historical backfill, capped at 90 days (2 requests)
 python -m finance_sync.cli backfill --days 90
+
+# Fold hand-categorized Review rows into Transactions
+python -m finance_sync.cli review
+python -m finance_sync.cli review --dry-run
 ```
+
+## The review loop
+
+When Jev is unsure, the transaction lands on the `Review` tab with its proposed
+category and score, and is deliberately kept **out** of `Transactions` so an
+uncertain guess never becomes a fact in your books.
+
+To resolve one, type a category into the `category` column of the `Review` tab,
+then run `review`. For each completed row it:
+
+1. moves the transaction into `Transactions` with `category_source: manual`,
+   which protects it from every future sync;
+2. appends a rule to `Overrides` derived from the merchant, so that merchant is
+   never asked about again;
+3. removes the row from `Review` and recomputes the Budget.
+
+Patterns are derived conservatively — `VERCEL INC. VERCEL.COM CA 09/18` becomes
+`VERCEL`, and `UBER *EATS` stays distinct from `UBER *TRIP`, because collapsing
+those would send every food delivery into travel. Rows with an unrecognized
+category or an unusable date are left on the tab rather than guessed at.
+
+Running `review` twice is safe: nothing is promoted twice and no duplicate
+override is written.
+
+## Scheduling
+
+`.github/workflows/sync.yml` runs `sync` daily and can be triggered by hand.
+
+**Secrets** (repo → Settings → Secrets and variables → Actions):
+`SIMPLEFIN_ACCESS_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+`GOOGLE_REFRESH_TOKEN`, `TYPESAFE_API_KEY`.
+
+**Variables** (optional, same page): `USE_JEV`, `JEV_CONFIDENCE_THRESHOLD`,
+`DRIVE_FOLDER_NAME`.
+
+**Running it by hand:** Actions tab → *finance-sync* → *Run workflow*. Pick
+`sync`, `backfill` or `review`, set the lookback, and optionally tick dry run.
+That is how backfill and review are run — no laptop needed.
+
+The cron is `0 13 * * *`, which is 06:00 Pacific during PDT. GitHub cron is UTC
+only with no DST awareness, so it drifts to 05:00 local during PST, and GitHub
+delays scheduled runs under load. Neither matters for a daily sync.
+
+A run with a non-empty SimpleFIN `errors` array exits non-zero, so GitHub's
+default workflow-failure email tells you. Each run also writes its summary to
+the Actions job summary page.
+
+Concurrency is limited to one run at a time: two concurrent writers to the same
+spreadsheet could interleave an upsert.
 
 Every run prints `fetched / inserted / updated / unchanged / routed_to_review`
 plus a breakdown of which categories came from where.

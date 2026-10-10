@@ -195,6 +195,51 @@ def _run_sync(config: Config, args, days: int) -> int:
     return 1 if result.errors else 0
 
 
+def _run_review(config: Config, args) -> int:
+    """Fold hand-categorized Review rows back into Transactions."""
+    from .review import process_rows
+
+    backend = _make_backend(config, args.fake_sheets)
+    sheets = SheetsSync(backend, folder_name=config.drive_folder_name, dry_run=args.dry_run)
+
+    months = sheets.month_keys()
+    if not months:
+        print("No Finances spreadsheets found.")
+        return 0
+
+    totals = {"promoted": 0, "overrides_added": 0, "still_pending": 0, "skipped": 0}
+    for month_key in months:
+        rows = sheets.review_rows(month_key)
+        if not rows:
+            continue
+        outcome = process_rows(rows, sheets.override_rows(month_key))
+        outcome.month_key = month_key
+
+        if not outcome.promoted and not outcome.skipped:
+            totals["still_pending"] += len(outcome.remaining)
+            continue
+
+        print(f"\nFinances {month_key}:")
+        for txn in outcome.promoted:
+            print(f"  -> {txn.category.value:<18} {txn.description[:44]}")
+        for pattern, category, _ in outcome.new_overrides:
+            print(f"     override added: {pattern!r} -> {category}")
+        if outcome.skipped:
+            print(f"  !! {len(outcome.skipped)} row(s) unusable, left on the tab")
+
+        sheets.apply_review(month_key, outcome)
+        for key in totals:
+            totals[key] += outcome.counts[key]
+
+    verb = "would promote" if args.dry_run else "promoted"
+    print(
+        f"\n{verb}: {totals['promoted']} "
+        f"overrides_added={totals['overrides_added']} "
+        f"still_pending={totals['still_pending']} skipped={totals['skipped']}"
+    )
+    return 0
+
+
 def _add_common_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dry-run", action="store_true", help="print what would change, write nothing")
     parser.add_argument("--print-only", action="store_true", help="print transactions and skip Sheets entirely")
@@ -244,8 +289,7 @@ def main(argv: list[str] | None = None) -> int:
         if command == "sync":
             return _run_sync(config, args, args.days)
         if command == "review":
-            logger.error("`review` arrives in stage 5")
-            return 2
+            return _run_review(config, args)
     except (SimpleFinError, ConfigError) as exc:
         logger.error("%s", exc)
         return 1

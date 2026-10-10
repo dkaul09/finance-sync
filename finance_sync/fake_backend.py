@@ -61,6 +61,11 @@ class FakeSheetsBackend(SheetsBackend):
         self.call_log.append(f"add_tab:{spreadsheet_id}:{name}")
         self.spreadsheets[spreadsheet_id].setdefault(name, [list(header)])
 
+    def clear_tab(self, spreadsheet_id: str, tab: str, keep_header: bool = True) -> None:
+        self.call_log.append(f"clear:{spreadsheet_id}:{tab}")
+        rows = self.spreadsheets[spreadsheet_id].get(tab, [])
+        self.spreadsheets[spreadsheet_id][tab] = rows[:1] if keep_header else []
+
     def read_tab(self, spreadsheet_id: str, tab: str) -> list[list[str]]:
         self.call_log.append(f"read:{spreadsheet_id}:{tab}")
         return [list(r) for r in self.spreadsheets[spreadsheet_id].get(tab, [])]
@@ -89,4 +94,4 @@ class FakeSheetsBackend(SheetsBackend):
         return self.tab(title, tab)[1:]
 
     def write_calls(self) -> list[str]:
-        return [c for c in self.call_log if c.startswith(("update:", "append:"))]
+        return [c for c in self.call_log if c.startswith(("update:", "append:", "clear:"))]

@@ -1,0 +1,81 @@
+name: finance-sync
+
+on:
+  schedule:
+    # 06:00 America/Los_Angeles. GitHub cron is UTC only and has no DST
+    # awareness, so this is PDT (UTC-7). During PST it fires at 05:00 local.
+    # GitHub also delays scheduled runs under load; a few minutes is normal.
+    - cron: "0 13 * * *"
+
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "Which command to run"
+        type: choice
+        options: [sync, backfill, review]
+        default: sync
+      days:
+        description: "Lookback window in days (sync/backfill)"
+        type: string
+        default: "30"
+      dry_run:
+        description: "Plan only, write nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  # Never let a manual run collide with the nightly one: two concurrent
+  # writers to the same spreadsheet could interleave an upsert.
+  group: finance-sync
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[sheets,jev]"
+
+      - name: Run
+        env:
+          SIMPLEFIN_ACCESS_URL: ${{ secrets.SIMPLEFIN_ACCESS_URL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          USE_JEV: ${{ vars.USE_JEV || 'true' }}
+          JEV_CONFIDENCE_THRESHOLD: ${{ vars.JEV_CONFIDENCE_THRESHOLD || '0.8' }}
+          DRIVE_FOLDER_NAME: ${{ vars.DRIVE_FOLDER_NAME || 'Finances' }}
+          COMMAND: ${{ inputs.command || 'sync' }}
+          DAYS: ${{ inputs.days || '30' }}
+          DRY_RUN: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          set -o pipefail
+          if [ "$COMMAND" = "review" ]; then
+            python -m finance_sync.cli review $DRY_RUN 2>&1 | tee run.log
+          else
+            python -m finance_sync.cli "$COMMAND" --days "$DAYS" $DRY_RUN 2>&1 | tee run.log
+          fi
+
+      - name: Write run summary
+        if: always()
+        run: |
+          {
+            echo "### finance-sync: \`${COMMAND:-sync}\`"
+            echo
+            echo '```'
+            tail -n 60 run.log 2>/dev/null || echo "no output captured"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          COMMAND: ${{ inputs.command || 'sync' }}

@@ -227,6 +227,12 @@ class GoogleSheetsBackend(SheetsBackend):  # pragma: no cover - network transpor
             body={"values": [header]},
         ).execute()
 
+    def clear_tab(self, spreadsheet_id: str, tab: str, keep_header: bool = True) -> None:
+        rng = f"{tab}!A2:ZZ" if keep_header else tab
+        self._sheets.spreadsheets().values().clear(
+            spreadsheetId=spreadsheet_id, range=rng, body={}
+        ).execute()
+
     def read_tab(self, spreadsheet_id: str, tab: str) -> list[list[str]]:
         response = (
             self._sheets.spreadsheets()

@@ -50,6 +50,8 @@ class SheetsBackend(Protocol):
 
     def add_tab(self, spreadsheet_id: str, name: str, header: list[str]) -> None: ...
 
+    def clear_tab(self, spreadsheet_id: str, tab: str, keep_header: bool = True) -> None: ...
+
     def read_tab(self, spreadsheet_id: str, tab: str) -> list[list[str]]: ...
 
     def update_rows(self, spreadsheet_id: str, tab: str, updates: list[tuple[int, list[str]]]) -> None: ...
@@ -342,6 +344,59 @@ class SheetsSync:
         plans = self.plan(transactions, now=now, categorizer_factory=categorizer_factory)
         self.apply(plans)
         return plans
+
+    def month_keys(self) -> list[str]:
+        """Every `Finances YYYY-MM` spreadsheet in the folder, oldest first."""
+        folder_id = self._folder_readonly() if self._dry_run else self._folder()
+        if folder_id is None:
+            return []
+        months = []
+        for title, _ in self._backend.list_spreadsheets(folder_id):
+            if not title.startswith("Finances "):
+                continue
+            key = title.removeprefix("Finances ").strip()
+            if len(key) == 7 and key[4] == "-":
+                months.append(key)
+        return sorted(months)
+
+    def apply_review(self, month_key: str, outcome) -> None:
+        """Write a review pass back: promote, record overrides, trim Review."""
+        if self._dry_run:
+            logger.info("Dry run: review changes not written")
+            return
+
+        spreadsheet_id = self.spreadsheet_for(month_key)
+
+        if outcome.promoted:
+            existing = self._backend.read_tab(spreadsheet_id, TRANSACTIONS_TAB)
+            body = existing[1:] if existing else []
+            plan = plan_upsert(body, outcome.promoted)
+            if plan.updates:
+                self._backend.update_rows(spreadsheet_id, TRANSACTIONS_TAB, plan.updates)
+            if plan.inserts:
+                self._backend.append_rows(spreadsheet_id, TRANSACTIONS_TAB, plan.inserts)
+
+        if outcome.new_overrides:
+            self._backend.append_rows(
+                spreadsheet_id, OVERRIDES_TAB, outcome.new_overrides
+            )
+
+        # Rewrite Review with only what is still pending.
+        self._backend.clear_tab(spreadsheet_id, REVIEW_TAB)
+        if outcome.remaining:
+            self._backend.append_rows(spreadsheet_id, REVIEW_TAB, outcome.remaining)
+
+        self.refresh_budget(spreadsheet_id)
+
+    def review_rows(self, month_key: str) -> list[list[str]]:
+        spreadsheet_id = self.spreadsheet_for(month_key)
+        rows = self._backend.read_tab(spreadsheet_id, REVIEW_TAB)
+        return rows[1:] if rows else []
+
+    def override_rows(self, month_key: str) -> list[list[str]]:
+        spreadsheet_id = self.spreadsheet_for(month_key)
+        rows = self._backend.read_tab(spreadsheet_id, OVERRIDES_TAB)
+        return rows[1:] if rows else []
 
     def budget_rows(self, spreadsheet_id: str) -> list[list[str]]:
         """The Budget tab body, for display."""
