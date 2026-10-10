@@ -95,6 +95,8 @@ def _run_sync(config: Config, args, days: int) -> int:
     logger.info("Fetching %s..%s", start, end)
 
     result = client.fetch_transactions(start, end)
+    for message in result.messages:
+        logger.info("SimpleFIN says: %s", message)
     for message in result.errors:
         logger.error("SimpleFIN error: %s", message)
 

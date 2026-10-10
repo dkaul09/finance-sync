@@ -22,6 +22,10 @@ MAX_WINDOW_DAYS = 60
 #: The published rate limit. A 90-day backfill costs 2 of these.
 DAILY_REQUEST_LIMIT = 24
 
+#: The bridge sits behind Cloudflare, which rejects urllib's default
+#: `Python-urllib/x.y` User-Agent with error 1010. An explicit one is required.
+USER_AGENT = "finance-sync/0.1 (+https://github.com/)"
+
 
 class SimpleFinError(RuntimeError):
     """Raised when SimpleFIN returns an unusable response."""
@@ -33,6 +37,8 @@ class FetchResult:
     transactions: list[Transaction]
     errors: list[str]
     requests_made: int
+    #: `x-api-message` notices: informational, not failures.
+    messages: tuple[str, ...] | list[str] = ()
 
 
 def date_windows(
@@ -100,7 +106,19 @@ def parse_accounts(payload: dict) -> FetchResult:
     if not isinstance(payload, dict):
         raise SimpleFinError(f"expected a JSON object, got {type(payload).__name__}")
 
-    errors = [str(e) for e in (payload.get("errors") or [])]
+    # The live bridge returns `errlist`; older docs say `errors`. Reading only
+    # one of them would silently swallow exactly what must never be swallowed.
+    errors = [
+        str(e)
+        for key in ("errors", "errlist")
+        for e in (payload.get(key) or [])
+    ]
+
+    # Out-of-band notices (rate-limit warnings, deprecations) arrive here.
+    api_message = payload.get("x-api-message") or []
+    if isinstance(api_message, str):
+        api_message = [api_message]
+    messages = [str(m) for m in api_message]
     accounts: list[Account] = []
     transactions: list[Transaction] = []
 
@@ -121,7 +139,11 @@ def parse_accounts(payload: dict) -> FetchResult:
             transactions.append(_parse_transaction(raw_txn, account))
 
     return FetchResult(
-        accounts=accounts, transactions=transactions, errors=errors, requests_made=0
+        accounts=accounts,
+        transactions=transactions,
+        errors=errors,
+        requests_made=0,
+        messages=messages,
     )
 
 
@@ -166,6 +188,8 @@ class SimpleFinClient:
     def _get(self, start: dt.date, end: dt.date) -> dict:
         query = urllib.parse.urlencode(
             {
+                # version=2 is required for the current response format.
+                "version": 2,
                 "start-date": int(
                     dt.datetime.combine(start, dt.time.min, tzinfo=dt.UTC).timestamp()
                 ),
@@ -175,7 +199,10 @@ class SimpleFinClient:
             }
         )
         url = f"{self._url.rstrip('/')}/accounts?{query}"
-        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+        request = urllib.request.Request(
+            url,
+            headers={"Accept": "application/json", "User-Agent": USER_AGENT},
+        )
         if self._auth:
             request.add_header("Authorization", self._auth)
 
@@ -206,6 +233,7 @@ class SimpleFinClient:
         accounts: dict[str, Account] = {}
         transactions: dict[str, Transaction] = {}
         errors: list[str] = []
+        messages: list[str] = []
 
         for window_start, window_end in windows:
             result = parse_accounts(self._get(window_start, window_end))
@@ -214,10 +242,14 @@ class SimpleFinClient:
             for txn in result.transactions:
                 transactions[txn.transaction_id] = txn
             errors.extend(result.errors)
+            for message in result.messages:
+                if message not in messages:
+                    messages.append(message)
 
         return FetchResult(
             accounts=list(accounts.values()),
             transactions=sorted(transactions.values(), key=lambda t: (t.date, t.transaction_id)),
             errors=errors,
             requests_made=len(windows),
+            messages=messages,
         )
