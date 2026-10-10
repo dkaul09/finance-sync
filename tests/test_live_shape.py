@@ -76,3 +76,37 @@ class TestLiveShapeParsing:
         payload["connections"] = [{"id": "x"}]
         payload["accounts"][0]["holdings"] = [{"id": "h", "market_value": "1.00"}]
         assert parse_accounts(payload).transactions
+
+
+class TestPayeeIsCaptured:
+    def test_payee_is_kept_alongside_description(self, live_demo_payload):
+        result = parse_accounts(live_demo_payload)
+        txn = next(t for t in result.transactions if t.payee)
+        assert txn.payee and txn.description
+
+    def test_merchant_prefers_the_clean_payee(self):
+        """`TRADER JOE S #250` is unmatchable; `Trader Joe's` is not."""
+        payload = {
+            "accounts": [{
+                "id": "A", "name": "Card", "balance": "0",
+                "transactions": [{
+                    "id": "X", "posted": 1791288000, "amount": "-23.63",
+                    "description": "TRADER JOE S #250", "payee": "Trader Joe's",
+                }],
+            }]
+        }
+        txn = parse_accounts(payload).transactions[0]
+        assert txn.description == "TRADER JOE S #250"
+        assert txn.merchant == "Trader Joe's"
+
+    def test_merchant_falls_back_to_description_when_payee_is_absent(self):
+        payload = {
+            "accounts": [{
+                "id": "A", "name": "Card", "balance": "0",
+                "transactions": [{
+                    "id": "X", "posted": 1791288000, "amount": "-1.00",
+                    "description": "SOME RAW DESC",
+                }],
+            }]
+        }
+        assert parse_accounts(payload).transactions[0].merchant == "SOME RAW DESC"

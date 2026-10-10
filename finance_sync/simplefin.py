@@ -165,7 +165,10 @@ def _parse_transaction(raw: dict, account: Account) -> Transaction:
     # `posted` unset. Treat both as pending.
     pending = bool(raw.get("pending", False)) or posted_date is None
 
+    # Keep both: `description` matches the bank statement the user eyeballs,
+    # while `payee` is SimpleFIN's normalized merchant name used for matching.
     description = str(raw.get("description") or raw.get("payee") or "").strip()
+    payee = str(raw.get("payee") or "").strip()
 
     return Transaction(
         transaction_id=txn_id,
@@ -173,6 +176,7 @@ def _parse_transaction(raw: dict, account: Account) -> Transaction:
         posted_date=None if pending else posted_date,
         account=account.label,
         description=description,
+        payee=payee,
         amount=_to_decimal(raw.get("amount", "0"), "amount", txn_id),
         pending=pending,
     )

@@ -46,6 +46,10 @@ class Transaction:
     account: str
     description: str
     amount: Decimal
+    #: SimpleFIN's cleaned merchant name ("Trader Joe's") as opposed to the raw
+    #: bank description ("TRADER JOE S #250"). Far better for rule matching.
+    #: Not written to the sheet; rules run on freshly fetched transactions.
+    payee: str = ""
     posted_date: dt.date | None = None
     category: Category = Category.OTHER
     pending: bool = False
@@ -54,6 +58,11 @@ class Transaction:
     recurring: float | None = None
     business_expense: float | None = None
     last_updated: dt.datetime | None = None
+
+    @property
+    def merchant(self) -> str:
+        """The best available merchant string for categorization."""
+        return self.payee.strip() or self.description.strip()
 
     @property
     def month_key(self) -> str:
