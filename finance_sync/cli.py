@@ -9,6 +9,7 @@ import sys
 
 from .config import Config, ConfigError
 from .models import Transaction
+from .sheets import SheetsSync
 from .simplefin import SimpleFinClient, SimpleFinError
 
 logger = logging.getLogger("finance_sync")
@@ -25,7 +26,7 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def _print_transactions(transactions: list[Transaction]) -> None:
-    """Stage 1 checkpoint output: the parsed ledger, grouped by target month."""
+    """The parsed ledger, grouped by the spreadsheet it will be routed to."""
     if not transactions:
         print("No transactions in range.")
         return
@@ -54,24 +55,85 @@ def _date_range(days: int) -> tuple[dt.date, dt.date]:
     return end - dt.timedelta(days=days - 1), end
 
 
-def _run_fetch(config: Config, days: int) -> int:
+def _make_backend(config: Config, fake: bool):
+    """Pick a Sheets transport. `--fake-sheets` rehearses with no credentials."""
+    if fake:
+        from .fake_backend import FakeSheetsBackend
+
+        logger.warning("Using an in-memory fake Sheets backend; nothing is persisted")
+        return FakeSheetsBackend()
+
+    missing = [
+        name
+        for name, value in (
+            ("GOOGLE_CLIENT_ID", config.google_client_id),
+            ("GOOGLE_CLIENT_SECRET", config.google_client_secret),
+            ("GOOGLE_REFRESH_TOKEN", config.google_refresh_token),
+        )
+        if not value
+    ]
+    if missing:
+        raise ConfigError(
+            f"Missing Google credentials: {', '.join(missing)}. "
+            "Run scripts/auth.py once to mint a refresh token."
+        )
+
+    from .google_backend import GoogleSheetsBackend, build_credentials
+
+    return GoogleSheetsBackend(
+        build_credentials(
+            config.google_client_id,  # type: ignore[arg-type]
+            config.google_client_secret,  # type: ignore[arg-type]
+            config.google_refresh_token,  # type: ignore[arg-type]
+        )
+    )
+
+
+def _run_sync(config: Config, args, days: int) -> int:
     client = SimpleFinClient(config.access_url)
     start, end = _date_range(days)
     logger.info("Fetching %s..%s", start, end)
 
     result = client.fetch_transactions(start, end)
-
     for message in result.errors:
         logger.error("SimpleFIN error: %s", message)
 
     _print_transactions(result.transactions)
+
+    if args.print_only:
+        print(
+            f"\nfetched={len(result.transactions)} accounts={len(result.accounts)} "
+            f"requests={result.requests_made} errors={len(result.errors)}"
+        )
+        return 1 if result.errors else 0
+
+    backend = _make_backend(config, args.fake_sheets)
+    sheets = SheetsSync(backend, folder_name=config.drive_folder_name, dry_run=args.dry_run)
+    plans = sheets.sync(result.transactions)
+
+    totals = {"inserted": 0, "updated": 0, "unchanged": 0}
+    print()
+    for month_key, plan in sorted(plans.items()):
+        print(f"Finances {month_key}:")
+        print(plan.describe())
+        for key in totals:
+            totals[key] += plan.counts[key]
+
+    verb = "would change" if args.dry_run else "applied"
     print(
-        f"\nfetched={len(result.transactions)} accounts={len(result.accounts)} "
-        f"requests={result.requests_made} errors={len(result.errors)}"
+        f"\n{verb}: fetched={len(result.transactions)} inserted={totals['inserted']} "
+        f"updated={totals['updated']} unchanged={totals['unchanged']} "
+        f"routed_to_review=0 requests={result.requests_made} errors={len(result.errors)}"
     )
 
     # A non-empty errors array must make a scheduled run fail visibly.
     return 1 if result.errors else 0
+
+
+def _add_common_flags(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--dry-run", action="store_true", help="print what would change, write nothing")
+    parser.add_argument("--print-only", action="store_true", help="print transactions and skip Sheets entirely")
+    parser.add_argument("--fake-sheets", action="store_true", help="rehearse against an in-memory sheet")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -79,16 +141,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="command")
 
-    sync = sub.add_parser("sync", help="sync the current month (default)")
+    sync = sub.add_parser("sync", help="sync recent transactions (default)")
     sync.add_argument("--days", type=int, default=30, help="lookback window")
-    sync.add_argument("--dry-run", action="store_true", help="print, never write")
+    _add_common_flags(sync)
 
     backfill = sub.add_parser("backfill", help="pull historical transactions")
     backfill.add_argument("--days", type=int, default=BACKFILL_MAX_DAYS)
-    backfill.add_argument("--dry-run", action="store_true")
+    _add_common_flags(backfill)
 
     review = sub.add_parser("review", help="process hand-categorized Review rows")
-    review.add_argument("--dry-run", action="store_true")
+    _add_common_flags(review)
 
     return parser
 
@@ -99,6 +161,8 @@ def main(argv: list[str] | None = None) -> int:
     _configure_logging(args.verbose)
 
     command = args.command or "sync"
+    if args.command is None:
+        args = parser.parse_args(["sync"])
 
     try:
         config = Config.load()
@@ -111,13 +175,13 @@ def main(argv: list[str] | None = None) -> int:
             days = min(args.days, BACKFILL_MAX_DAYS)
             if days != args.days:
                 logger.warning("Capping backfill at %s days", BACKFILL_MAX_DAYS)
-            return _run_fetch(config, days)
+            return _run_sync(config, args, days)
         if command == "sync":
-            return _run_fetch(config, args.days)
+            return _run_sync(config, args, args.days)
         if command == "review":
             logger.error("`review` arrives in stage 5")
             return 2
-    except SimpleFinError as exc:
+    except (SimpleFinError, ConfigError) as exc:
         logger.error("%s", exc)
         return 1
 
