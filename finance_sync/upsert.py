@@ -25,6 +25,8 @@ class UpsertPlan:
     unchanged: list[str] = field(default_factory=list)
     #: transaction ids whose hand-edited category was protected.
     preserved_manual: list[str] = field(default_factory=list)
+    #: set when a dry run would have had to create the spreadsheet.
+    would_create: bool = False
 
     @property
     def counts(self) -> dict[str, int]:
@@ -35,7 +37,10 @@ class UpsertPlan:
         }
 
     def describe(self) -> str:
-        lines = [
+        lines = []
+        if self.would_create:
+            lines.append("  spreadsheet: would be CREATED")
+        lines += [
             f"  inserts:   {len(self.inserts)}",
             f"  updates:   {len(self.updates)}",
             f"  unchanged: {len(self.unchanged)}",

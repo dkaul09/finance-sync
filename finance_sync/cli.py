@@ -8,6 +8,7 @@ import logging
 import sys
 
 from .config import Config, ConfigError
+from .errors import explain_http_error
 from .models import Transaction
 from .sheets import SheetsSync
 from .simplefin import SimpleFinClient, SimpleFinError
@@ -211,6 +212,12 @@ def main(argv: list[str] | None = None) -> int:
             return 2
     except (SimpleFinError, ConfigError) as exc:
         logger.error("%s", exc)
+        return 1
+    except Exception as exc:  # noqa: BLE001 - last-chance translation
+        explanation = explain_http_error(exc)
+        if explanation is None:
+            raise
+        logger.error("%s", explanation)
         return 1
 
     parser.print_help()

@@ -66,18 +66,24 @@ class SheetsSync:
             self._folder_id = self._backend.ensure_folder(self._folder_name)
         return self._folder_id
 
+    def find_spreadsheet(self, month_key: str) -> str | None:
+        """Look up `Finances YYYY-MM` without creating anything."""
+        return self._backend.find_spreadsheet(
+            self._folder(), spreadsheet_title(month_key)
+        )
+
     def spreadsheet_for(self, month_key: str) -> str:
         """Find or create `Finances YYYY-MM`. This is the month-rollover path.
 
         Called with the transaction's own month, so no run ever needs to know
         what "the current month" is.
         """
+        spreadsheet_id = self.find_spreadsheet(month_key)
+        if spreadsheet_id is not None:
+            return spreadsheet_id
+
         folder_id = self._folder()
         title = spreadsheet_title(month_key)
-
-        existing = self._backend.find_spreadsheet(folder_id, title)
-        if existing is not None:
-            return existing
 
         logger.info("Creating spreadsheet %s", title)
         spreadsheet_id = self._backend.create_spreadsheet(folder_id, title, TAB_HEADERS)
@@ -134,7 +140,25 @@ class SheetsSync:
 
         plans: dict[str, UpsertPlan] = {}
         for month_key in sorted(by_month):
-            spreadsheet_id = self.spreadsheet_for(month_key)
+            # A dry run must not create anything, so resolve without creating
+            # and plan against an empty sheet when it does not exist yet.
+            if self._dry_run:
+                spreadsheet_id = self.find_spreadsheet(month_key)
+                if spreadsheet_id is None:
+                    month_txns = by_month[month_key]
+                    categorized = apply_results(
+                        month_txns,
+                        (categorizer_factory(  # type: ignore[misc]
+                            []
+                        ) if categorizer_factory is not None
+                         else LayeredCategorizer()).categorize(month_txns),
+                    )
+                    plan = plan_upsert([], categorized, now=now)
+                    plan.would_create = True
+                    plans[month_key] = plan
+                    continue
+            else:
+                spreadsheet_id = self.spreadsheet_for(month_key)
 
             override_rows = self._backend.read_tab(spreadsheet_id, OVERRIDES_TAB)
             overrides = parse_overrides(override_rows[1:] if override_rows else [])

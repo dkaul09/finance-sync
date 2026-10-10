@@ -423,3 +423,42 @@ class TestOverridesSurviveMonthRollover:
             "Overrides", [["", "", ""], ["REAL", "fees", "FALSE"]])
         sync.sync([txn("B", date=dt.date(2026, 10, 5), posted=dt.date(2026, 10, 6))], now=NOW)
         assert [r[0] for r in backend.tab("Finances 2026-10", "Overrides")[1:]] == ["REAL"]
+
+
+class TestDryRunCreatesNothing:
+    """A dry run that creates spreadsheets is not a dry run."""
+
+    def test_no_spreadsheet_is_created(self, backend):
+        dry = SheetsSync(backend, dry_run=True)
+        dry.sync([txn("TXN-1")], now=NOW)
+        assert backend.created_spreadsheets == []
+
+    def test_no_folder_write_occurs(self, backend):
+        dry = SheetsSync(backend, dry_run=True)
+        dry.sync([txn("TXN-1")], now=NOW)
+        assert backend.write_calls() == []
+
+    def test_it_reports_that_it_would_create_the_spreadsheet(self, backend):
+        dry = SheetsSync(backend, dry_run=True)
+        plans = dry.sync([txn("TXN-1")], now=NOW)
+        assert plans["2026-10"].would_create is True
+        assert "would be CREATED" in plans["2026-10"].describe()
+
+    def test_it_still_plans_the_inserts(self, backend):
+        dry = SheetsSync(backend, dry_run=True)
+        plans = dry.sync([txn("TXN-1"), txn("TXN-2", amount="-3.00")], now=NOW)
+        assert plans["2026-10"].counts["inserted"] == 2
+
+    def test_it_still_categorizes(self, backend):
+        dry = SheetsSync(backend, dry_run=True)
+        plans = dry.sync([txn("TXN-1", description="TRADER JOE S #250")], now=NOW)
+        row = plans["2026-10"].inserts[0]
+        assert column(row, "category") == "groceries"
+
+    def test_an_existing_spreadsheet_is_still_diffed_properly(self, backend):
+        live = SheetsSync(backend)
+        live.sync([txn("TXN-1")], now=NOW)
+        dry = SheetsSync(backend, dry_run=True)
+        plans = dry.sync([txn("TXN-1")], now=LATER, categorizer_factory=keep_categories)
+        assert plans["2026-10"].counts["unchanged"] == 1
+        assert plans["2026-10"].would_create is False
