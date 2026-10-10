@@ -25,6 +25,10 @@ class FakeSheetsBackend(SheetsBackend):
             self.folders[name] = f"folder-{len(self.folders) + 1}"
         return self.folders[name]
 
+    def find_folder(self, name: str) -> str | None:
+        self.call_log.append(f"find_folder:{name}")
+        return self.folders.get(name)
+
     def find_spreadsheet(self, folder_id: str, title: str) -> str | None:
         self.call_log.append(f"find:{title}")
         for sid, stitle in self.titles.items():

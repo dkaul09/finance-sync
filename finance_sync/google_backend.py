@@ -72,7 +72,7 @@ class GoogleSheetsBackend(SheetsBackend):  # pragma: no cover - network transpor
         self._sheets = build("sheets", "v4", credentials=credentials, cache_discovery=False)
 
     # -- Drive ------------------------------------------------------------
-    def ensure_folder(self, name: str) -> str:
+    def find_folder(self, name: str) -> str | None:
         escaped = name.replace("'", "\\'")
         query = (
             f"name = '{escaped}' and mimeType = '{FOLDER_MIME}' and trashed = false"
@@ -83,8 +83,12 @@ class GoogleSheetsBackend(SheetsBackend):  # pragma: no cover - network transpor
             .execute()
         )
         files = response.get("files", [])
-        if files:
-            return files[0]["id"]
+        return files[0]["id"] if files else None
+
+    def ensure_folder(self, name: str) -> str:
+        existing = self.find_folder(name)
+        if existing is not None:
+            return existing
 
         logger.info("Creating Drive folder %r", name)
         created = (

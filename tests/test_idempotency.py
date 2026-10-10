@@ -462,3 +462,30 @@ class TestDryRunCreatesNothing:
         plans = dry.sync([txn("TXN-1")], now=LATER, categorizer_factory=keep_categories)
         assert plans["2026-10"].counts["unchanged"] == 1
         assert plans["2026-10"].would_create is False
+
+
+class TestDryRunDoesNotCreateTheFolder:
+    """The first fix missed this: planning created the folder as a side effect."""
+
+    def test_no_folder_is_created(self, backend):
+        dry = SheetsSync(backend, dry_run=True)
+        dry.sync([txn("TXN-1")], now=NOW)
+        assert backend.folders == {}
+
+    def test_it_still_reports_the_full_plan(self, backend):
+        dry = SheetsSync(backend, dry_run=True)
+        plans = dry.sync([txn("TXN-1")], now=NOW)
+        assert plans["2026-10"].counts["inserted"] == 1
+        assert plans["2026-10"].would_create is True
+
+    def test_an_existing_folder_is_reused_without_writing(self, backend):
+        backend.ensure_folder("Finances")
+        calls_before = len(backend.write_calls())
+        dry = SheetsSync(backend, dry_run=True)
+        dry.sync([txn("TXN-1")], now=NOW)
+        assert list(backend.folders) == ["Finances"]
+        assert len(backend.write_calls()) == calls_before
+
+    def test_a_real_run_still_creates_the_folder(self, backend):
+        SheetsSync(backend).sync([txn("TXN-1")], now=NOW)
+        assert list(backend.folders) == ["Finances"]

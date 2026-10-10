@@ -34,6 +34,8 @@ class SheetsBackend(Protocol):
 
     def ensure_folder(self, name: str) -> str: ...
 
+    def find_folder(self, name: str) -> str | None: ...
+
     def find_spreadsheet(self, folder_id: str, title: str) -> str | None: ...
 
     def create_spreadsheet(self, folder_id: str, title: str, tabs: dict[str, list[str]]) -> str: ...
@@ -66,11 +68,22 @@ class SheetsSync:
             self._folder_id = self._backend.ensure_folder(self._folder_name)
         return self._folder_id
 
+    def _folder_readonly(self) -> str | None:
+        """Resolve the folder without creating it. Used by dry runs."""
+        if self._folder_id is None:
+            self._folder_id = self._backend.find_folder(self._folder_name)
+        return self._folder_id
+
     def find_spreadsheet(self, month_key: str) -> str | None:
-        """Look up `Finances YYYY-MM` without creating anything."""
-        return self._backend.find_spreadsheet(
-            self._folder(), spreadsheet_title(month_key)
-        )
+        """Look up `Finances YYYY-MM` without creating anything.
+
+        Resolves the folder read-only during a dry run, so planning cannot
+        create the folder as a side effect of looking inside it.
+        """
+        folder_id = self._folder_readonly() if self._dry_run else self._folder()
+        if folder_id is None:
+            return None
+        return self._backend.find_spreadsheet(folder_id, spreadsheet_title(month_key))
 
     def spreadsheet_for(self, month_key: str) -> str:
         """Find or create `Finances YYYY-MM`. This is the month-rollover path.
