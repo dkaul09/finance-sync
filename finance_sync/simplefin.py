@@ -194,6 +194,10 @@ class SimpleFinClient:
             {
                 # version=2 is required for the current response format.
                 "version": 2,
+                # Pending transactions are EXCLUDED by default. Without this a
+                # recent purchase is invisible until the bank posts it, which
+                # can take days.
+                "pending": 1,
                 "start-date": int(
                     dt.datetime.combine(start, dt.time.min, tzinfo=dt.UTC).timestamp()
                 ),

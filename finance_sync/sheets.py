@@ -267,7 +267,14 @@ class SheetsSync:
                 # Otherwise it is left out of Transactions entirely until a
                 # human resolves it on the Review tab.
 
-            for_review = [t for t in categorized if t.transaction_id in low_confidence]
+            # Review is only for transactions that are not already in
+            # Transactions. Re-listing one whose score merely dipped below the
+            # threshold would ask the user to re-decide a settled question.
+            for_review = [
+                t for t in categorized
+                if t.transaction_id in low_confidence
+                and t.transaction_id not in existing_by_id
+            ]
 
             plan = plan_upsert(body, for_transactions, now=now)
             plan.review = for_review
@@ -287,7 +294,44 @@ class SheetsSync:
             if month_plan.inserts:
                 self._backend.append_rows(spreadsheet_id, TRANSACTIONS_TAB, month_plan.inserts)
             self._write_review(spreadsheet_id, month_plan)
+            self._prune_review(spreadsheet_id)
             self.refresh_budget(spreadsheet_id)
+
+    def _prune_review(self, spreadsheet_id: str) -> None:
+        """Drop Review rows for transactions that now live in Transactions.
+
+        A borderline transaction can cross the confidence threshold on a later
+        run -- Jev's score drifts -- and get written to Transactions. Leaving
+        its Review row behind would ask the user to decide something already
+        decided, and show the same transaction in two places.
+        """
+        review = self._backend.read_tab(spreadsheet_id, REVIEW_TAB)
+        body = review[1:] if review else []
+        if not body:
+            return
+
+        transactions = self._backend.read_tab(spreadsheet_id, TRANSACTIONS_TAB)
+        settled = {
+            parsed.transaction_id
+            for row in (transactions[1:] if transactions else [])
+            if (parsed := row_to_transaction(row)) is not None
+        }
+
+        keep = [
+            row for row in body
+            if (row[0] if row else "").strip() not in settled
+            and any((cell or "").strip() for cell in row)
+        ]
+        if len(keep) == len(body):
+            return
+
+        logger.info(
+            "Clearing %s Review row(s) already resolved in Transactions",
+            len(body) - len(keep),
+        )
+        self._backend.clear_tab(spreadsheet_id, REVIEW_TAB)
+        if keep:
+            self._backend.append_rows(spreadsheet_id, REVIEW_TAB, keep)
 
     def _write_review(self, spreadsheet_id: str, plan: UpsertPlan) -> None:
         """Append new low-confidence proposals, skipping ones already listed."""

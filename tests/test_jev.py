@@ -310,3 +310,122 @@ class TestReviewRouting:
         after = backend.data_rows("Finances 2026-10")[0]
         assert after[TRANSACTION_COLUMNS.index("category")] == "personal"
         assert after[TRANSACTION_COLUMNS.index("amount")] == "-99.00"
+
+
+class TestScoreJitterDoesNotChurn:
+    """Jev is probabilistic: the same question returns slightly different
+    numbers each time. Those must not rewrite the row on every run."""
+
+    @pytest.fixture
+    def backend(self):
+        from finance_sync.fake_backend import FakeSheetsBackend
+
+        return FakeSheetsBackend()
+
+    def _sync(self, backend, confidence, recurring=0.5):
+        from finance_sync.sheets import SheetsSync
+
+        client = FakeClient({
+            "category": FakeChoice("personal", confidence),
+            "recurring": FakeNoul(recurring),
+        })
+        factory = lambda o: LayeredCategorizer(  # noqa: E731
+            overrides=o, fallback=JevCategorizer("k", 0.8, client=client))
+        return SheetsSync(backend).sync(
+            [txn()], now=dt.datetime(2026, 10, 9, tzinfo=dt.UTC),
+            categorizer_factory=factory)
+
+    def test_a_drifting_confidence_is_not_an_update(self):
+        from finance_sync.fake_backend import FakeSheetsBackend
+
+        backend = FakeSheetsBackend()
+        self._sync(backend, 0.82)
+        plans = self._sync(backend, 0.84)
+        assert plans["2026-10"].counts["unchanged"] == 1
+        assert plans["2026-10"].counts["updated"] == 0
+
+    def test_a_drifting_noul_is_not_an_update(self):
+        from finance_sync.fake_backend import FakeSheetsBackend
+
+        backend = FakeSheetsBackend()
+        self._sync(backend, 0.90, recurring=0.41)
+        plans = self._sync(backend, 0.90, recurring=0.47)
+        assert plans["2026-10"].counts["unchanged"] == 1
+
+    def test_repeated_runs_issue_no_writes(self):
+        from finance_sync.fake_backend import FakeSheetsBackend
+
+        backend = FakeSheetsBackend()
+        self._sync(backend, 0.81)
+        before = len(backend.write_calls())
+        for score in (0.83, 0.79, 0.85):
+            self._sync(backend, score)
+        assert len(backend.write_calls()) == before
+
+    def test_an_actual_category_change_still_updates(self):
+        """Suppressing jitter must not suppress real decisions."""
+        from finance_sync.fake_backend import FakeSheetsBackend
+        from finance_sync.sheets import SheetsSync
+
+        backend = FakeSheetsBackend()
+        self._sync(backend, 0.90)
+        client = FakeClient({"category": FakeChoice("pets", 0.90)})
+        factory = lambda o: LayeredCategorizer(  # noqa: E731
+            overrides=o, fallback=JevCategorizer("k", 0.8, client=client))
+        plans = SheetsSync(backend).sync(
+            [txn()], now=dt.datetime(2026, 10, 9, tzinfo=dt.UTC),
+            categorizer_factory=factory)
+        assert plans["2026-10"].counts["updated"] == 1
+
+
+class TestReviewIsPruned:
+    """A borderline transaction can cross the threshold on a later run."""
+
+    @pytest.fixture
+    def backend(self):
+        from finance_sync.fake_backend import FakeSheetsBackend
+
+        return FakeSheetsBackend()
+
+    def _sync(self, backend, confidence):
+        from finance_sync.sheets import SheetsSync
+
+        client = FakeClient({"category": FakeChoice("personal", confidence)})
+        factory = lambda o: LayeredCategorizer(  # noqa: E731
+            overrides=o, fallback=JevCategorizer("k", 0.8, client=client))
+        return SheetsSync(backend).sync(
+            [txn()], now=dt.datetime(2026, 10, 9, tzinfo=dt.UTC),
+            categorizer_factory=factory)
+
+    def test_crossing_the_threshold_clears_the_review_row(self, backend):
+        self._sync(backend, 0.70)
+        assert len(backend.tab("Finances 2026-10", "Review")[1:]) == 1
+
+        self._sync(backend, 0.85)
+        assert backend.data_rows("Finances 2026-10") != []
+        assert backend.tab("Finances 2026-10", "Review")[1:] == []
+
+    def test_nothing_is_ever_in_both_places(self, backend):
+        from finance_sync.rows import row_to_transaction
+
+        self._sync(backend, 0.70)
+        self._sync(backend, 0.85)
+        tx_ids = {
+            t.transaction_id
+            for r in backend.data_rows("Finances 2026-10")
+            if (t := row_to_transaction(r))
+        }
+        review_ids = {r[0] for r in backend.tab("Finances 2026-10", "Review")[1:]}
+        assert tx_ids & review_ids == set()
+
+    def test_an_unresolved_row_stays_on_review(self, backend):
+        self._sync(backend, 0.70)
+        self._sync(backend, 0.72)
+        assert len(backend.tab("Finances 2026-10", "Review")[1:]) == 1
+
+    def test_the_review_header_survives_pruning(self, backend):
+        from finance_sync.rows import REVIEW_COLUMNS
+
+        self._sync(backend, 0.70)
+        self._sync(backend, 0.85)
+        assert backend.tab("Finances 2026-10", "Review")[0] == REVIEW_COLUMNS

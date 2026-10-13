@@ -45,8 +45,16 @@ REVIEW_COLUMNS = [
 OVERRIDE_COLUMNS = ["pattern", "category", "is_regex"]
 
 #: Fields compared to decide insert / update / unchanged.
-#: `last_updated` is deliberately excluded: stamping it every run would make
-#: every row look changed and defeat idempotency entirely.
+#:
+#: `last_updated` is excluded: stamping it every run would make every row look
+#: changed and defeat idempotency entirely.
+#:
+#: The model scores -- `confidence`, `recurring`, `business_expense` -- are
+#: excluded for the same reason. Jev is probabilistic, so asking it twice about
+#: the same transaction returns slightly different numbers (0.82 then 0.84),
+#: which would rewrite every Jev-categorized row on every single run forever.
+#: What matters is the decision, not the decimals behind it; when the category
+#: does change, the fresh scores are written along with it.
 COMPARED_FIELDS = [
     "date",
     "posted_date",
@@ -56,9 +64,6 @@ COMPARED_FIELDS = [
     "category",
     "pending",
     "category_source",
-    "confidence",
-    "recurring",
-    "business_expense",
 ]
 
 

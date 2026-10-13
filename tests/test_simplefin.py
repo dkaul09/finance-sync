@@ -187,3 +187,69 @@ class TestSettledPayload:
 
 def test_daily_limit_constant_matches_the_documented_budget():
     assert DAILY_REQUEST_LIMIT == 24
+
+
+class TestPendingAreRequested:
+    """The SimpleFIN spec excludes pending transactions unless pending=1.
+
+    Without it a purchase is invisible until the bank posts it, which can take
+    days -- exactly the transactions a daily sync most needs to show.
+    """
+
+    def _query(self) -> dict:
+        import urllib.parse
+
+        from finance_sync.simplefin import SimpleFinClient
+
+        captured = {}
+
+        class Capture(SimpleFinClient):
+            def _get(self, start, end):
+                query = urllib.parse.urlencode(
+                    {
+                        "version": 2,
+                        "pending": 1,
+                        "start-date": 0,
+                        "end-date": 1,
+                    }
+                )
+                captured.update(dict(urllib.parse.parse_qsl(query)))
+                return {"errlist": [], "accounts": []}
+
+        Capture("https://u:p@example.com/simplefin").fetch_transactions(
+            dt.date(2026, 10, 1), dt.date(2026, 10, 2)
+        )
+        return captured
+
+    def test_the_client_sends_pending(self):
+        import inspect
+
+        from finance_sync import simplefin
+
+        source = inspect.getsource(simplefin.SimpleFinClient._get)
+        assert '"pending": 1' in source
+
+    def test_the_client_sends_version_2(self):
+        import inspect
+
+        from finance_sync import simplefin
+
+        source = inspect.getsource(simplefin.SimpleFinClient._get)
+        assert '"version": 2' in source
+
+    def test_a_pending_transaction_parses_with_no_posted_date(self):
+        payload = {
+            "errlist": [],
+            "accounts": [{
+                "id": "A", "name": "Card", "balance": "0",
+                "transactions": [{
+                    "id": "P1", "posted": 0, "transacted_at": 1791720000,
+                    "amount": "-52.80", "description": "TRADER JOE S #250",
+                    "payee": "Trader Joe's", "pending": True,
+                }],
+            }],
+        }
+        txn = parse_accounts(payload).transactions[0]
+        assert txn.pending is True
+        assert txn.posted_date is None
+        assert txn.amount == Decimal("-52.80")
