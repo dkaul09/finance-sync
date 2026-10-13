@@ -8,10 +8,75 @@ testable.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from dataclasses import dataclass, field, replace
 
 from .models import CategorySource, Transaction
 from .rows import comparable, row_to_transaction, transaction_to_row
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FetchContext:
+    """What one fetch actually covered.
+
+    Removal is the only operation that deletes transaction data, so it needs
+    proof that an absent transaction is genuinely gone rather than merely
+    outside the window or missing from a partial response.
+    """
+
+    window_start: dt.date
+    window_end: dt.date
+    #: Account labels that appeared in the response.
+    accounts_seen: set[str] = field(default_factory=set)
+    #: SimpleFIN's errors array. Non-empty means the payload is untrustworthy.
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def trustworthy(self) -> bool:
+        return not self.errors
+
+
+def find_vanished(
+    existing_rows: list[list[str]],
+    incoming_ids: set[str],
+    context: FetchContext,
+) -> list[str]:
+    """Transaction ids for pending rows the bank no longer reports.
+
+    Every guard below exists to stop a transient API condition from deleting
+    real data:
+
+    * only `pending` rows can vanish -- a posted transaction is a fact
+    * the row's date must fall inside the window actually fetched
+    * the response must have carried no errors
+    * the row's account must have reported in this response
+    * `manual` rows are never removed automatically, only left alone
+    """
+    if not context.trustworthy:
+        return []
+
+    vanished: list[str] = []
+    for row in existing_rows:
+        parsed = row_to_transaction(row)
+        if parsed is None or not parsed.pending:
+            continue
+        if parsed.transaction_id in incoming_ids:
+            continue
+        if not (context.window_start <= parsed.date <= context.window_end):
+            continue
+        if parsed.account not in context.accounts_seen:
+            continue
+        if parsed.category_source is CategorySource.MANUAL:
+            logger.warning(
+                "Pending transaction %s (%s) is no longer reported, but it was "
+                "categorized by hand; leaving it in place",
+                parsed.transaction_id, parsed.description,
+            )
+            continue
+        vanished.append(parsed.transaction_id)
+    return vanished
 
 
 @dataclass
@@ -29,6 +94,8 @@ class UpsertPlan:
     would_create: bool = False
     #: transactions routed to the Review tab instead of Transactions.
     review: list = field(default_factory=list)
+    #: ids of pending transactions the bank stopped reporting.
+    vanished: list[str] = field(default_factory=list)
 
     @property
     def counts(self) -> dict[str, int]:
@@ -37,6 +104,7 @@ class UpsertPlan:
             "updated": len(self.updates),
             "unchanged": len(self.unchanged),
             "routed_to_review": len(self.review),
+            "vanished": len(self.vanished),
         }
 
     def describe(self) -> str:
@@ -50,6 +118,8 @@ class UpsertPlan:
         ]
         if self.review:
             lines.append(f"  to review: {len(self.review)}")
+        if self.vanished:
+            lines.append(f"  vanished:  {len(self.vanished)} (pending, no longer reported)")
         if self.preserved_manual:
             lines.append(
                 f"  manual categories preserved: {', '.join(self.preserved_manual)}"

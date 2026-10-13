@@ -245,8 +245,14 @@ override is written.
 That is how backfill and review are run — no laptop needed.
 
 The cron is `0 13 * * *`, which is 06:00 Pacific during PDT. GitHub cron is UTC
-only with no DST awareness, so it drifts to 05:00 local during PST, and GitHub
-delays scheduled runs under load. Neither matters for a daily sync.
+only with no DST awareness, so it drifts to 05:00 local during PST.
+
+**Expect it to be late.** GitHub throttles scheduled jobs on free runners far
+more than its docs suggest: observed runs fired 4.5 to 8.5 hours after the
+scheduled time. It still runs every day, which is what matters here -- the sync
+is idempotent and looks back 30 days, so a late or even skipped run costs
+nothing but freshness. If a run is genuinely needed at a fixed hour, trigger it
+by hand from the Actions tab.
 
 A run with a non-empty SimpleFIN `errors` array exits non-zero, so GitHub's
 default workflow-failure email tells you. Each run also writes its summary to
@@ -290,6 +296,34 @@ fact. A transaction already on `Transactions` keeps the category it has.
 
 If the Jev API fails, the run degrades to `miscl`/`none` and continues: a
 categorization outage must not stop financial data reaching the sheet.
+
+**Jev is asked once per transaction, ever.** Decisions already recorded in the
+sheet -- a `jev` or `manual` category on `Transactions`, or a row parked on
+`Review` -- are read back and reused, so a steady-state run makes zero API
+calls. This matters beyond cost: Jev is probabilistic, so re-asking returns
+slightly different numbers each time, which previously rewrote every row on
+every run. A cached answer is final; `Overrides` and rules still govern every
+future transaction, but will not re-decide one Jev has already answered. To
+change such a row, edit its category and set `category_source` to `manual`.
+
+Rules-sourced rows are deliberately not cached: re-matching them is free, so an
+edit to the seed dictionary still reaches rows already in the sheet.
+
+## Vanished pending transactions
+
+A pending transaction can disappear instead of settling -- a dropped hold, a
+declined charge. Left in place it would overstate the budget forever, so the
+sync removes it. This is the only path that deletes transaction data, and it
+acts only when all of these hold:
+
+- the row is marked `pending` (a posted transaction is a fact)
+- its date falls inside the window actually fetched
+- SimpleFIN returned an empty `errors` array
+- the row's account reported in that response
+- the row is not `manual` -- a hand-edited row is only warned about
+
+Each removal is logged, counted as `vanished=` in the run summary, and reported
+by `--dry-run` without writing.
 
 Matching normalizes punctuation, so one pattern matches both SimpleFIN's clean
 `payee` (`Trader Joe's`) and the raw bank `description` (`TRADER JOE S #250`).

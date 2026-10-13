@@ -8,10 +8,30 @@ from typing import Protocol
 
 from .budget import BUDGET_COLUMNS, FIRST_LINE_ROW, build_rows, default_rows
 from .categorize import LayeredCategorizer, apply_results, parse_overrides
-from .models import Transaction
+from .models import Category, CategoryResult, CategorySource, Transaction
 from .rows import OVERRIDE_COLUMNS, REVIEW_COLUMNS, TRANSACTION_COLUMNS
-from .rows import review_row_ids, row_to_transaction, transaction_to_review_row
-from .upsert import UpsertPlan, plan_upsert
+from .rows import (
+    REVIEW_COLUMNS,
+    review_row_ids,
+    row_to_transaction,
+    transaction_to_review_row,
+)
+
+
+#: Category sources that count as settled, so the row is never re-asked.
+#: `rules` is absent on purpose: re-matching is free and lets rule edits apply.
+_DECIDED = frozenset({CategorySource.JEV, CategorySource.MANUAL})
+
+
+def _as_float(raw: str) -> float | None:
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+from .upsert import FetchContext, UpsertPlan, find_vanished, plan_upsert
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +208,7 @@ class SheetsSync:
         transactions: list[Transaction],
         now: dt.datetime | None = None,
         categorizer_factory=None,
+        fetch: FetchContext | None = None,
     ) -> dict[str, UpsertPlan]:
         """Categorize then diff, one plan per target month. Reads, never writes.
 
@@ -209,7 +230,7 @@ class SheetsSync:
                     categorized = apply_results(
                         month_txns,
                         (categorizer_factory(  # type: ignore[misc]
-                            []
+                            [], {}
                         ) if categorizer_factory is not None
                          else LayeredCategorizer()).categorize(month_txns),
                     )
@@ -223,10 +244,12 @@ class SheetsSync:
             override_rows = self._backend.read_tab(spreadsheet_id, OVERRIDES_TAB)
             overrides = parse_overrides(override_rows[1:] if override_rows else [])
 
+            prior = self._prior_decisions(spreadsheet_id)
+
             if categorizer_factory is not None:
-                categorizer = categorizer_factory(overrides)
+                categorizer = categorizer_factory(overrides, prior)
             else:
-                categorizer = LayeredCategorizer(overrides=overrides)
+                categorizer = LayeredCategorizer(overrides=overrides, prior=prior)
 
             month_txns = by_month[month_key]
             results = categorizer.categorize(month_txns)
@@ -267,17 +290,28 @@ class SheetsSync:
                 # Otherwise it is left out of Transactions entirely until a
                 # human resolves it on the Review tab.
 
-            # Review is only for transactions that are not already in
-            # Transactions. Re-listing one whose score merely dipped below the
-            # threshold would ask the user to re-decide a settled question.
+            # Review is for transactions that still lack a real category --
+            # not merely ones absent from Transactions. A row sitting there
+            # with source `none` is unresolved, so it belongs on Review where
+            # a human can act and where the next run reads it back as a prior.
+            # Re-listing one that already has a decided category would ask the
+            # user to re-decide a settled question.
             for_review = [
                 t for t in categorized
                 if t.transaction_id in low_confidence
-                and t.transaction_id not in existing_by_id
+                and (
+                    t.transaction_id not in existing_by_id
+                    or existing_by_id[t.transaction_id].category_source
+                    is CategorySource.NONE
+                )
             ]
 
             plan = plan_upsert(body, for_transactions, now=now)
             plan.review = for_review
+            if fetch is not None:
+                plan.vanished = find_vanished(
+                    body, {t.transaction_id for t in month_txns}, fetch
+                )
             plans[month_key] = plan
         return plans
 
@@ -293,9 +327,90 @@ class SheetsSync:
                 self._backend.update_rows(spreadsheet_id, TRANSACTIONS_TAB, month_plan.updates)
             if month_plan.inserts:
                 self._backend.append_rows(spreadsheet_id, TRANSACTIONS_TAB, month_plan.inserts)
+            if month_plan.vanished:
+                self._remove_vanished(spreadsheet_id, month_plan.vanished)
             self._write_review(spreadsheet_id, month_plan)
             self._prune_review(spreadsheet_id)
             self.refresh_budget(spreadsheet_id)
+
+    def _prior_decisions(self, spreadsheet_id: str) -> dict[str, CategoryResult]:
+        """Decisions already made, read back off the sheet.
+
+        Three sources: rows on Transactions categorized by Jev, rows the user
+        categorized by hand, and rows parked on Review awaiting a human. Each
+        is a question already answered, so asking again would spend money to
+        get a slightly different number for no benefit.
+
+        Rules-sourced rows are deliberately NOT cached: matching them again is
+        free and deterministic, and it lets an edit to the seed dictionary
+        reach rows already in the sheet.
+        """
+        prior: dict[str, CategoryResult] = {}
+
+        rows = self._backend.read_tab(spreadsheet_id, TRANSACTIONS_TAB)
+        for row in rows[1:] if rows else []:
+            parsed = row_to_transaction(row)
+            if parsed is None or parsed.category_source not in _DECIDED:
+                continue
+            prior[parsed.transaction_id] = CategoryResult(
+                transaction_id=parsed.transaction_id,
+                category=parsed.category,
+                source=parsed.category_source,
+                confidence=parsed.confidence,
+                recurring=parsed.recurring,
+                business_expense=parsed.business_expense,
+            )
+
+        review = self._backend.read_tab(spreadsheet_id, REVIEW_TAB)
+        for row in review[1:] if review else []:
+            padded = list(row) + [""] * len(REVIEW_COLUMNS)
+            txn_id = (padded[REVIEW_COLUMNS.index("transaction_id")] or "").strip()
+            if not txn_id or txn_id in prior:
+                continue
+            try:
+                category = Category(
+                    (padded[REVIEW_COLUMNS.index("proposed_category")] or "").strip().lower()
+                )
+            except ValueError:
+                continue
+            prior[txn_id] = CategoryResult(
+                transaction_id=txn_id,
+                category=category,
+                source=CategorySource.JEV,
+                confidence=_as_float(padded[REVIEW_COLUMNS.index("confidence")]),
+                recurring=_as_float(padded[REVIEW_COLUMNS.index("recurring")]),
+                business_expense=_as_float(padded[REVIEW_COLUMNS.index("business_expense")]),
+                needs_review=True,
+            )
+
+        return prior
+
+    def _remove_vanished(self, spreadsheet_id: str, vanished: list[str]) -> None:
+        """Rewrite Transactions without pending rows the bank dropped.
+
+        This is the only code path that deletes transaction data. The decision
+        is made by `find_vanished`, which refuses to act on anything it cannot
+        prove is gone.
+        """
+        rows = self._backend.read_tab(spreadsheet_id, TRANSACTIONS_TAB)
+        body = rows[1:] if rows else []
+        drop = set(vanished)
+
+        keep = []
+        for row in body:
+            parsed = row_to_transaction(row)
+            if parsed is not None and parsed.transaction_id in drop:
+                logger.warning(
+                    "Removing vanished pending transaction %s (%s %s)",
+                    parsed.transaction_id, parsed.amount, parsed.description,
+                )
+                continue
+            if any((cell or "").strip() for cell in row):
+                keep.append(row)
+
+        self._backend.clear_tab(spreadsheet_id, TRANSACTIONS_TAB)
+        if keep:
+            self._backend.append_rows(spreadsheet_id, TRANSACTIONS_TAB, keep)
 
     def _prune_review(self, spreadsheet_id: str) -> None:
         """Drop Review rows for transactions that now live in Transactions.
@@ -311,11 +426,14 @@ class SheetsSync:
             return
 
         transactions = self._backend.read_tab(spreadsheet_id, TRANSACTIONS_TAB)
-        settled = {
-            parsed.transaction_id
-            for row in (transactions[1:] if transactions else [])
-            if (parsed := row_to_transaction(row)) is not None
-        }
+        settled = set()
+        for row in transactions[1:] if transactions else []:
+            parsed = row_to_transaction(row)
+            # A row that is present but still uncategorized is not settled:
+            # removing its Review entry would strand it with nowhere to be
+            # resolved and nothing to stop it being re-asked every run.
+            if parsed is not None and parsed.category_source is not CategorySource.NONE:
+                settled.add(parsed.transaction_id)
 
         keep = [
             row for row in body
@@ -384,8 +502,11 @@ class SheetsSync:
         transactions: list[Transaction],
         now: dt.datetime | None = None,
         categorizer_factory=None,
+        fetch: FetchContext | None = None,
     ) -> dict[str, UpsertPlan]:
-        plans = self.plan(transactions, now=now, categorizer_factory=categorizer_factory)
+        plans = self.plan(
+            transactions, now=now, categorizer_factory=categorizer_factory, fetch=fetch
+        )
         self.apply(plans)
         return plans
 

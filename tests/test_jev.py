@@ -258,7 +258,7 @@ class TestReviewRouting:
         from finance_sync.sheets import SheetsSync
 
         client = FakeClient({"category": FakeChoice("personal", confidence)})
-        factory = lambda overrides: LayeredCategorizer(  # noqa: E731
+        factory = lambda overrides, prior=None: LayeredCategorizer(  # noqa: E731
             overrides=overrides, fallback=JevCategorizer("k", 0.8, client=client)
         )
         return SheetsSync(backend).sync(
@@ -329,7 +329,7 @@ class TestScoreJitterDoesNotChurn:
             "category": FakeChoice("personal", confidence),
             "recurring": FakeNoul(recurring),
         })
-        factory = lambda o: LayeredCategorizer(  # noqa: E731
+        factory = lambda o, prior=None: LayeredCategorizer(  # noqa: E731
             overrides=o, fallback=JevCategorizer("k", 0.8, client=client))
         return SheetsSync(backend).sync(
             [txn()], now=dt.datetime(2026, 10, 9, tzinfo=dt.UTC),
@@ -370,7 +370,7 @@ class TestScoreJitterDoesNotChurn:
         backend = FakeSheetsBackend()
         self._sync(backend, 0.90)
         client = FakeClient({"category": FakeChoice("pets", 0.90)})
-        factory = lambda o: LayeredCategorizer(  # noqa: E731
+        factory = lambda o, prior=None: LayeredCategorizer(  # noqa: E731
             overrides=o, fallback=JevCategorizer("k", 0.8, client=client))
         plans = SheetsSync(backend).sync(
             [txn()], now=dt.datetime(2026, 10, 9, tzinfo=dt.UTC),
@@ -391,7 +391,7 @@ class TestReviewIsPruned:
         from finance_sync.sheets import SheetsSync
 
         client = FakeClient({"category": FakeChoice("personal", confidence)})
-        factory = lambda o: LayeredCategorizer(  # noqa: E731
+        factory = lambda o, prior=None: LayeredCategorizer(  # noqa: E731
             overrides=o, fallback=JevCategorizer("k", 0.8, client=client))
         return SheetsSync(backend).sync(
             [txn()], now=dt.datetime(2026, 10, 9, tzinfo=dt.UTC),

@@ -46,7 +46,7 @@ class _PassThrough:
         ]
 
 
-def keep(_overrides=None) -> _PassThrough:
+def keep(_overrides=None, _prior=None) -> _PassThrough:
     return _PassThrough()
 
 

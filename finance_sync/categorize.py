@@ -279,16 +279,28 @@ class LayeredCategorizer:
         overrides: list[Override] | None = None,
         rules: dict[str, Category] | None = None,
         fallback: Categorizer | None = None,
+        prior: dict[str, CategoryResult] | None = None,
     ) -> None:
         self._overrides = overrides or []
         self._rules = SEED_RULES if rules is None else rules
         self._fallback = fallback or NullCategorizer()
+        #: Decisions already recorded in the sheet, keyed by transaction id.
+        #: Reusing them is what stops the model being paid to answer the same
+        #: question every single day.
+        self._prior = prior or {}
 
     def categorize(self, transactions: list[Transaction]) -> list[CategoryResult]:
         results: dict[str, CategoryResult] = {}
         unresolved: list[Transaction] = []
 
         for txn in transactions:
+            # A decision already recorded is final: it short-circuits every
+            # other layer, so neither the API nor the scores are touched again.
+            cached = self._prior.get(txn.transaction_id)
+            if cached is not None:
+                results[txn.transaction_id] = cached
+                continue
+
             override = next((o for o in self._overrides if o.matches(txn)), None)
             if override is not None:
                 results[txn.transaction_id] = CategoryResult(

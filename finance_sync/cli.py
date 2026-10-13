@@ -163,15 +163,30 @@ def _run_sync(config: Config, args, days: int) -> int:
     backend = _make_backend(config, args.fake_sheets)
     sheets = SheetsSync(backend, folder_name=config.drive_folder_name, dry_run=args.dry_run)
 
-    def categorizer_factory(overrides):
+    def categorizer_factory(overrides, prior=None):
         from .categorize import LayeredCategorizer
         from .jev import build_categorizer
 
-        return LayeredCategorizer(overrides=overrides, fallback=build_categorizer(config))
+        return LayeredCategorizer(
+            overrides=overrides, prior=prior, fallback=build_categorizer(config)
+        )
 
-    plans = sheets.sync(result.transactions, categorizer_factory=categorizer_factory)
+    from .upsert import FetchContext
 
-    totals = {"inserted": 0, "updated": 0, "unchanged": 0, "routed_to_review": 0}
+    fetch = FetchContext(
+        window_start=start,
+        window_end=end,
+        accounts_seen={a.label for a in result.accounts},
+        errors=list(result.errors),
+    )
+    plans = sheets.sync(
+        result.transactions,
+        categorizer_factory=categorizer_factory,
+        fetch=fetch,
+    )
+
+    totals = {"inserted": 0, "updated": 0, "unchanged": 0,
+              "routed_to_review": 0, "vanished": 0}
     print()
     for month_key, plan in sorted(plans.items()):
         print(f"Finances {month_key}:")
@@ -188,6 +203,7 @@ def _run_sync(config: Config, args, days: int) -> int:
         f"\n{verb}: fetched={len(result.transactions)} inserted={totals['inserted']} "
         f"updated={totals['updated']} unchanged={totals['unchanged']} "
         f"routed_to_review={totals['routed_to_review']} "
+        f"vanished={totals['vanished']} "
         f"requests={result.requests_made} errors={len(result.errors)}"
     )
 
